@@ -72,7 +72,7 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
 
 
 def official_conll_eval(gold_path, predicted_path, metric, official_stdout=True):
-    cmd = ["conll-2012/scorer/v8.01/scorer.pl", metric, gold_path, predicted_path, "none"]
+    cmd = ["data/reference-coreference-scorers/v8.01/scorer.pl", metric, gold_path, predicted_path, "none"]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     stdout, stderr = process.communicate()
     process.wait()
