@@ -247,9 +247,9 @@ def minimize_partition(partition, extension, args, tokenizer):
 def minimize_language(args):
     tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name)
 
-    minimize_partition('dev', 'v4_gold_conll', args, tokenizer)
-    minimize_partition('test', 'v4_gold_conll', args, tokenizer)
-    minimize_partition('train', 'v4_gold_conll', args, tokenizer)
+    minimize_partition('dev', 'tuebdz_gold_conll', args, tokenizer)
+    minimize_partition('test', 'tuebdz_gold_conll', args, tokenizer)
+    minimize_partition('train', 'tuebdz_gold_conll', args, tokenizer)
 
 
 if __name__ == '__main__':
@@ -263,7 +263,7 @@ if __name__ == '__main__':
     parser.add_argument('--seg_len', type=int, default=128,
                         help='Segment length: 128, 256, 384, 512')
     parser.add_argument('--language', type=str, default='english',
-                        help='english, chinese, arabic')
+                        help='english, chinese, arabic, german')
     # parser.add_argument('--lower_case', action='store_true',
     #                     help='Do lower case on input')
 

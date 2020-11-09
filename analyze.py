@@ -88,9 +88,9 @@ def get_prediction_wo_hoi(config_name, saved_suffix, gpu_id):
 def get_original_samples(config, split='tst'):
     samples = []
     paths = {
-        'trn': join(config['data_dir'], f'train.english.{config["max_segment_len"]}.jsonlines'),
-        'dev': join(config['data_dir'], f'dev.english.{config["max_segment_len"]}.jsonlines'),
-        'tst': join(config['data_dir'], f'test.english.{config["max_segment_len"]}.jsonlines')
+        'trn': join(config['data_dir'], f'train.german.{config["max_segment_len"]}.jsonlines'),
+        'dev': join(config['data_dir'], f'dev.german.{config["max_segment_len"]}.jsonlines'),
+        'tst': join(config['data_dir'], f'test.german.{config["max_segment_len"]}.jsonlines')
     }
     with open(paths[split]) as fin:
         for line in fin.readlines():

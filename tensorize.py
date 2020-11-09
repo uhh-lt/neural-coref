@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class CorefDataProcessor:
     def __init__(self, config, language='english'):
         self.config = config
-        self.language = language
+        self.language = config['language'] or language
 
         self.max_seg_len = config['max_segment_len']
         self.max_training_seg = config['max_training_sentences']
@@ -33,9 +33,9 @@ class CorefDataProcessor:
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config)
             paths = {
-                'trn': join(self.data_dir, f'train.{language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, f'dev.{language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, f'test.{language}.{self.max_seg_len}.jsonlines')
+                'trn': join(self.data_dir, f'train.{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, f'test.{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
