@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 BEGIN_DOCUMENT_REGEX = re.compile(r"#begin document (.*)\.(\d+)")  # First line at each document
 COREF_RESULTS_REGEX = re.compile(r".*Coreference: Recall: \([0-9.]+ / [0-9.]+\) ([0-9.]+)%\tPrecision: \([0-9.]+ / [0-9.]+\) ([0-9.]+)%\tF1: ([0-9.]+)%.*", re.DOTALL)
+REMOVE_MENTION_MARKUP = re.compile(r"\(?(\d+)\)?")
 
 
 def get_doc_key(doc_id, part):
@@ -49,7 +50,10 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
             output_file.write(line)
             output_file.write("\n")
         else:
-            assert get_doc_key(row[0], row[1]) == doc_key
+            # assert get_doc_key(row[0], row[1]) == doc_key
+            assert "_".join(row[0].split(".")) == doc_key
+            row[3] = REMOVE_MENTION_MARKUP.sub(r"\1", row[3])
+            row[6] = REMOVE_MENTION_MARKUP.sub(r"\1", row[6])
             coref_list = []
             if word_index in end_map:
                 for cluster_id in end_map[word_index]:
