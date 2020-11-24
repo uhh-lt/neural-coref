@@ -122,6 +122,17 @@ class CorefModel(nn.Module):
         speaker_ids = speaker_ids[input_mask]
         num_words = mention_doc.shape[0]
 
+        if sentence_len.shape[0] > 10:
+            return [
+                None,
+                None,
+                None,
+                torch.tensor([]),
+                torch.tensor([]),
+                torch.tensor([]),
+                torch.tensor([[0.1]]),
+            ]
+
         # Get candidate span
         sentence_indices = sentence_map  # [num tokens]
         candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
