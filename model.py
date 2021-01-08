@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import BertModel
+from transformers import BertModel, ElectraModel
 import util
 import logging
 from collections import Iterable
@@ -28,7 +28,10 @@ class CorefModel(nn.Module):
 
         # Model
         self.dropout = nn.Dropout(p=config['dropout_rate'])
-        self.bert = BertModel.from_pretrained(config['bert_pretrained_name_or_path'])
+        if config.get("model_type") == "electra":
+            self.bert = ElectraModel.from_pretrained(config['bert_pretrained_name_or_path'])
+        else:
+            self.bert = BertModel.from_pretrained(config['bert_pretrained_name_or_path'])
 
         self.bert_emb_size = self.bert.config.hidden_size
         self.span_emb_size = self.bert_emb_size * 3
@@ -116,7 +119,10 @@ class CorefModel(nn.Module):
             do_loss = True
 
         # Get token emb
-        mention_doc, _ = self.bert(input_ids, attention_mask=input_mask)  # [num seg, num max tokens, emb size]
+        if conf["model_type"] == "electra":
+            mention_doc = self.bert(input_ids, attention_mask=input_mask)[0]
+        else:
+            mention_doc, _ = self.bert(input_ids, attention_mask=input_mask)  # [num seg, num max tokens, emb size]
         input_mask = input_mask.to(torch.bool)
         mention_doc = mention_doc[input_mask]
         speaker_ids = speaker_ids[input_mask]

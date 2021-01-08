@@ -4,7 +4,7 @@ import os
 import re
 import collections
 import json
-from transformers import BertTokenizer
+from transformers import BertTokenizer, ElectraTokenizer
 import conll
 import util
 
@@ -245,7 +245,10 @@ def minimize_partition(partition, extension, args, tokenizer):
 
 
 def minimize_language(args):
-    tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name)
+    if args.model_type == "electra":
+        tokenizer = ElectraTokenizer.from_pretrained(args.tokenizer_name, strip_accents=False)
+    else:
+        tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name)
 
     minimize_partition('dev', 'tuebdz_gold_conll', args, tokenizer)
     minimize_partition('test', 'tuebdz_gold_conll', args, tokenizer)
@@ -264,6 +267,7 @@ if __name__ == '__main__':
                         help='Segment length: 128, 256, 384, 512')
     parser.add_argument('--language', type=str, default='english',
                         help='english, chinese, arabic, german')
+    parser.add_argument('--model_type', type=str, default='bert')
     # parser.add_argument('--lower_case', action='store_true',
     #                     help='Do lower case on input')
 
