@@ -182,6 +182,7 @@ class CorefModel(nn.Module):
 
         # Get span embedding (these are the bert embeddings)
         span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
+        # list of all embeddings relevant to the candidate span, they are concated to form the span embedding
         candidate_emb_list = [span_start_emb, span_end_emb]
         if conf['use_features']:
             candidate_width_idx = candidate_ends - candidate_starts
@@ -189,14 +190,16 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
         # Use attended head or avg token
-        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
+        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)  # [num_candidates, num_words]
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
         if conf['model_heads']:
             token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
         else:
             token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
+        # Attention is zeroed out where the candidate tokens are False, i.e. where the token is not part of the candidate span
         candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
         candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
+        # Attention for each candidate, all tokens in the span are weighted using attention (or if model_heads is False unweighted)
         head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
         candidate_emb_list.append(head_attn_emb)
         candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
