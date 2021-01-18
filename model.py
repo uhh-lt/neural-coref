@@ -128,6 +128,71 @@ class CorefModel(nn.Module):
             'candidate_labels': candidate_labels,
         }
 
+    def get_top_spans(self, candidate_span_emb, candidates, num_words, do_loss, device='cpu'):
+        conf = self.config
+
+        candidate_starts = candidates['candidate_starts']
+        candidate_ends = candidates['candidate_ends']
+        candidate_labels = candidates['candidate_labels']
+        candidate_width_idx = candidate_ends - candidate_starts
+
+        # Get span score
+        candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+        if conf['use_width_prior']:
+            width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
+            candidate_width_score = width_score[candidate_width_idx]
+            candidate_mention_scores += candidate_width_score
+
+        # Extract top spans
+        candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
+        candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
+        num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words))
+        selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
+        assert len(selected_idx_cpu) == num_top_spans
+        selected_idx = torch.tensor(selected_idx_cpu, device=device)
+        top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
+        top_span_emb = candidate_span_emb[selected_idx]
+        top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+        top_span_mention_scores = candidate_mention_scores[selected_idx]
+        return {
+            'starts': top_span_starts,
+            'ends': top_span_ends,
+            'emb': top_span_emb,
+            'cluster_ids': top_span_cluster_ids,
+            'mention_scores': top_span_mention_scores,
+            'num_top_spans': num_top_spans,
+        }
+
+    def build_candidate_embeddings(self, mention_doc, candidate_spans, device='cpu'):
+        candidate_ends = candidate_spans['candidate_ends']
+        candidate_starts = candidate_spans['candidate_starts']
+        num_candidates = candidate_spans['num_candidates']
+        num_words = mention_doc.shape[0]
+
+        # Get span embedding (these are the bert embeddings)
+        span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
+        # list of all embeddings relevant to the candidate span, they are concated to form the span embedding
+        candidate_emb_list = [span_start_emb, span_end_emb]
+        if self.config['use_features']:
+            candidate_width_idx = candidate_ends - candidate_starts
+            candidate_width_emb = self.emb_span_width(candidate_width_idx)
+            candidate_width_emb = self.dropout(candidate_width_emb)
+            candidate_emb_list.append(candidate_width_emb)
+        # Use attended head or avg token
+        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)  # [num_candidates, num_words]
+        candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
+        if self.config['model_heads']:
+            token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
+        else:
+            token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
+        # Attention is zeroed out where the candidate tokens are False, i.e. where the token is not part of the candidate span
+        candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
+        candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
+        # Attention for each candidate, all tokens in the span are weighted using attention (or if model_heads is False unweighted)
+        head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
+        candidate_emb_list.append(head_attn_emb)
+        return candidate_emb_list
+
     def forward(self, *input):
         return self.get_predictions_and_loss(*input)
 
@@ -175,53 +240,16 @@ class CorefModel(nn.Module):
         else:
             gold_info = None
         candidate_spans = self.get_candidate_spans(num_words, sentence_map, gold_info, device=device)
-        candidate_ends = candidate_spans['candidate_ends']
-        candidate_starts = candidate_spans['candidate_starts']
-        num_candidates = candidate_spans['num_candidates']
-        candidate_labels = candidate_spans['candidate_labels']
+        # num_candidates = candidate_spans['num_candidates']
 
-        # Get span embedding (these are the bert embeddings)
-        span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
-        # list of all embeddings relevant to the candidate span, they are concated to form the span embedding
-        candidate_emb_list = [span_start_emb, span_end_emb]
-        if conf['use_features']:
-            candidate_width_idx = candidate_ends - candidate_starts
-            candidate_width_emb = self.emb_span_width(candidate_width_idx)
-            candidate_width_emb = self.dropout(candidate_width_emb)
-            candidate_emb_list.append(candidate_width_emb)
-        # Use attended head or avg token
-        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)  # [num_candidates, num_words]
-        candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
-        if conf['model_heads']:
-            token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
-        else:
-            token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
-        # Attention is zeroed out where the candidate tokens are False, i.e. where the token is not part of the candidate span
-        candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
-        candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
-        # Attention for each candidate, all tokens in the span are weighted using attention (or if model_heads is False unweighted)
-        head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
-        candidate_emb_list.append(head_attn_emb)
-        candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
+        candidate_span_emb = torch.cat(self.build_candidate_embeddings(mention_doc, candidate_spans, device=device), dim=1)  # [num candidates, new emb size]
 
-        # Get span score
-        candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
-        if conf['use_width_prior']:
-            width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
-            candidate_width_score = width_score[candidate_width_idx]
-            candidate_mention_scores += candidate_width_score
-
-        # Extract top spans
-        candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
-        candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
-        num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words))
-        selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
-        assert len(selected_idx_cpu) == num_top_spans
-        selected_idx = torch.tensor(selected_idx_cpu, device=device)
-        top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
-        top_span_emb = candidate_span_emb[selected_idx]
-        top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
-        top_span_mention_scores = candidate_mention_scores[selected_idx]
+        top_spans = self.get_top_spans(candidate_span_emb, candidate_spans, num_words, do_loss=do_loss, device=device)
+        top_span_starts, top_span_ends = top_spans['starts'], top_spans['ends']
+        top_span_emb = top_spans['emb']
+        top_span_cluster_ids = top_spans['cluster_ids']
+        top_span_mention_scores = top_spans['mention_scores']
+        num_top_spans = top_spans['num_top_spans']
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
@@ -502,10 +530,6 @@ class MentionModel(CorefModel):
         else:
             mention_doc = self.bert(input_ids, attention_mask=input_mask)[0]  # [num seg, num max tokens, emb size]
 
-        input_mask = input_mask.to(torch.bool)
-        mention_doc = mention_doc[input_mask]
-        speaker_ids = speaker_ids[input_mask]
-
         num_words = mention_doc.shape[0]
         gold_info = {
             "gold_starts": gold_starts,
@@ -549,3 +573,136 @@ class MentionModel(CorefModel):
                 cluster_to_spans[new_cluster].append((start.item(), end.item()))
 
         return scores, candidates["candidate_labels"], cluster_to_spans, loss
+
+
+class IncrementalCorefModel(CorefModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # layers for incremental model
+        # self.pair_score
+        # pair_score(torch.concact(seg_distance_emb, entity, mention))
+        # self.config['feature_emb_size']
+
+        # Takes concat(entity_representation, span_representation)
+        self.entity_representation_gate = nn.Linear(self.config['feature_emb_size'] * 2, 1)
+        # self.create_entity = torch.nn.Embedding(1, self.config['feature_emb_size'])
+        self.class_loss = torch.nn.CrossEntropyLoss()
+
+    def forward(self, *input):
+        # return self.get_predictions_and_loss(*input)
+        return self.get_predictions_incremental(*input)
+
+    def get_predictions_incremental(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
+                                    is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
+        device = self.device
+        conf = self.config
+
+        do_loss = False
+        if gold_mention_cluster_map is not None:
+            assert gold_starts is not None
+            assert gold_ends is not None
+            do_loss = True
+
+        # The model should already be trained so we detach the BERT part, massively improving performance
+        if conf['model_type'] == 'electra':
+            mention_doc = self.bert(input_ids, attention_mask=input_mask)[0].detach()
+        else:
+            mention_doc = self.bert(input_ids, attention_mask=input_mask)[0].detach()  # [num seg, num max tokens, emb size]
+
+        input_mask = input_mask.to(torch.bool)
+        mention_doc = mention_doc[input_mask]
+        speaker_ids = speaker_ids[input_mask]
+
+        num_words = mention_doc.shape[0]
+
+        if do_loss:
+            gold_info = {
+                'gold_starts': gold_starts,
+                'gold_ends': gold_ends,
+                'gold_mention_cluster_map': gold_mention_cluster_map,
+            }
+            labels_for_starts = dict(zip(gold_starts, gold_mention_cluster_map))
+        else:
+            gold_info = None
+
+        entities = [torch.zeros(self.config['feature_emb_size'], dtype=torch.float, device=device)]
+        candidate_spans = self.get_candidate_spans(num_words, sentence_map, gold_info, device=device)
+        candidate_iterator = zip(candidate_spans['candidate_starts'], candidate_spans['candidate_ends'], candidate_spans['candidate_labels'])
+        candidate_span_emb = torch.cat(self.build_candidate_embeddings(mention_doc, candidate_spans, device=device), dim=1)  # [num candidates, new emb size]
+
+        top_spans = self.get_top_spans(candidate_span_emb, candidate_spans, num_words, do_loss=do_loss, device=device)
+        top_span_starts, top_span_ends = top_spans['starts'], top_spans['ends']
+        top_span_emb = top_spans['emb']
+        top_span_cluster_ids = top_spans['cluster_ids']
+        top_span_mention_scores = top_spans['mention_scores']
+
+        entities_emb = torch.tensor([]).to(device)
+        new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
+        class_most_recent_entity = {}
+
+        if len(top_span_emb.shape) == 1:
+            top_span_emb = top_span_emb.unsqueeze(0)
+
+        losses = []
+        for emb, span_start, span_end, in zip(top_span_emb, top_span_starts, top_span_ends):
+            print(span_start, labels_for_starts)
+            gold_class = labels_for_starts.get(span_start)
+            if entities_emb.shape[0] == 0:
+                entities_emb = emb.unsqueeze(0).to(device)
+                sentence_distance = torch.zeros(1).unsqueeze(0).to(device)
+                entities_speaker = speaker_ids[span_start].unsqueeze(0).to(device)
+                entities_mention_distance = torch.zeros(1).unsqueeze(0).type(torch.long).to(device)
+                class_most_recent_entity[gold_class] = 0
+                continue
+            feature_list = []
+            if conf['use_metadata']:
+                top_span_speaker_ids = speaker_ids[span_start]
+                same_speaker = entities_speaker == top_span_speaker_ids
+                same_speaker_emb = self.emb_same_speaker(same_speaker.type(torch.long))
+                genre_emb = self.emb_genre(genre)
+                feature_list.append(same_speaker_emb.reshape(len(same_speaker), conf['feature_emb_size']))
+                feature_list.append(genre_emb.repeat(feature_list[0].shape[0]).reshape(-1, conf['feature_emb_size']))
+            if conf['use_segment_distance']:
+                seg_distance_emb = self.emb_segment_distance(sentence_distance.type(torch.long))
+                feature_list.append(seg_distance_emb.reshape(-1, conf['feature_emb_size']))
+            if conf['use_features']:
+                dists = util.bucket_distance(entities_mention_distance)
+                emb_dists = self.emb_top_antecedent_distance(dists.type(torch.long))
+                feature_list.append(emb_dists.reshape(-1, conf['feature_emb_size']))
+            feature_emb = torch.cat(feature_list, dim=1)
+            feature_emb = self.dropout(feature_emb)
+            embs = emb.repeat(entities_emb.shape[0], 1)
+            similarity_emb = embs * entities_emb
+            pair_emb = torch.cat([embs, entities_emb, similarity_emb, feature_emb], 1)
+            original_scores = self.coref_score_ffnn(pair_emb)
+            scores = torch.cat([new_cluster_threshold, original_scores])
+            dist = torch.softmax(scores, 0)
+
+            cluster_to_update = dist.argmax()
+            if gold_class:
+                target = torch.tensor([class_most_recent_entity.get(gold_class, -1) + 1]).to(device)
+                loss = self.class_loss(scores.squeeze(), target)
+                losses.append(loss)
+            else:
+                # TODO: in this case the span is incorrect, can we accrue loss?
+                pass
+
+            if cluster_to_update == 0:
+                entities_emb = torch.cat([entities_emb, emb.unsqueeze(0)])
+                sentence_distance = torch.cat([sentence_distance, torch.zeros(1).unsqueeze(0).to(device)])
+                entities_speaker = torch.cat([entities_speaker, speaker_ids[span_start].unsqueeze(0).to(device)])
+                entities_mention_distance = torch.cat([entities_mention_distance, torch.zeros(1).unsqueeze(0).to(device)])
+                class_most_recent_entity[gold_class] = entities_emb.shape[0] - 1
+            else:
+                cluster_to_update -= 1
+                class_most_recent_entity[gold_class] = cluster_to_update
+            entities_mention_distance += 1
+        print('LOSSES', len(losses), sum(losses))
+        return None, sum(losses) if len(losses) > 0 else torch.tensor(0.0, requires_grad=True)
+        # where not update in this iteartion:
+        # sentence_distance[1:] += 1
+
+        # update_value = torch.sigmoid(self.entity_representation_gate(torch.cat(entity_repr, span_repr)))
+        # entity_repr = update_value * entity_repr + (torch.tensor(1) - update_value) * span_repr
+        # TODO set last entity occurences to negative values to support differences between increments
