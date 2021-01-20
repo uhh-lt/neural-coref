@@ -7,6 +7,7 @@ from collections import Iterable, defaultdict
 import numpy as np
 import torch.nn.init as init
 import higher_order as ho
+from collections import defaultdict
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
@@ -160,6 +161,7 @@ class CorefModel(nn.Module):
             'emb': top_span_emb,
             'cluster_ids': top_span_cluster_ids,
             'mention_scores': top_span_mention_scores,
+            'candidate_mention_scores': candidate_mention_scores,
             'num_top_spans': num_top_spans,
         }
 
@@ -335,7 +337,15 @@ class CorefModel(nn.Module):
             if conf['fine_grained'] and conf['higher_order'] == 'cluster_merging':
                 top_pairwise_scores += cluster_merging_scores
             top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)  # [num top spans, max top antecedents + 1]
-            return candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores
+            return (
+                candidate_spans['candidate_starts'],
+                candidate_spans['candidate_ends'],
+                top_spans['mention_scores'],
+                top_spans['starts'],
+                top_spans['ends'],
+                top_antecedent_idx,
+                top_antecedent_scores,
+            )
 
         # Get gold labels
         top_antecedent_cluster_ids = top_span_cluster_ids[top_antecedent_idx]
@@ -398,7 +408,15 @@ class CorefModel(nn.Module):
                     logger.info('loss: %.4f' % loss.item())
         self.update_steps += 1
 
-        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], loss
+        return [
+            candidate_spans['candidate_starts'],
+            candidate_spans['candidate_ends'],
+            top_spans['candidate_mention_scores'],
+            top_spans['starts'],
+            top_spans['ends'],
+            top_antecedent_idx,
+            top_antecedent_scores
+        ], loss
 
     def _extract_top_spans(self, candidate_idx_sorted, candidate_starts, candidate_ends, num_top_spans):
         """ Keep top non-cross-overlapping candidates ordered by scores; compute on CPU because of loop """
@@ -593,6 +611,12 @@ class IncrementalCorefModel(CorefModel):
         # return self.get_predictions_and_loss(*input)
         return self.get_predictions_incremental(*input)
 
+    def update_evaluator(self, span_starts, span_ends, predicted_clusters, mention_to_cluster_id, gold_clusters, evaluator):
+        mention_to_predicted = {m: tuple(predicted_clusters[cluster_idx]) for m, cluster_idx in mention_to_cluster_id.items()}
+        gold_clusters = [tuple(tuple(m) for m in cluster) for cluster in gold_clusters]
+        mention_to_gold = {m: cluster for cluster in gold_clusters for m in cluster}
+        evaluator.update(predicted_clusters, gold_clusters, mention_to_predicted, mention_to_gold)
+
     def get_predictions_incremental(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                     is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
         device = self.device
@@ -625,17 +649,17 @@ class IncrementalCorefModel(CorefModel):
             labels_for_starts = dict(zip(gold_starts, gold_mention_cluster_map))
         else:
             gold_info = None
+            labels_for_starts = {}
 
         entities = [torch.zeros(self.config['feature_emb_size'], dtype=torch.float, device=device)]
         candidate_spans = self.get_candidate_spans(num_words, sentence_map, gold_info, device=device)
-        candidate_iterator = zip(candidate_spans['candidate_starts'], candidate_spans['candidate_ends'], candidate_spans['candidate_labels'])
         candidate_span_emb = torch.cat(self.build_candidate_embeddings(mention_doc, candidate_spans, device=device), dim=1)  # [num candidates, new emb size]
 
         top_spans = self.get_top_spans(candidate_span_emb, candidate_spans, num_words, do_loss=do_loss, device=device)
         top_span_starts, top_span_ends = top_spans['starts'], top_spans['ends']
         top_span_emb = top_spans['emb']
-        top_span_cluster_ids = top_spans['cluster_ids']
-        top_span_mention_scores = top_spans['mention_scores']
+        predicted_clusters = []
+        mention_to_cluster_id = {}
 
         entities_emb = torch.tensor([]).to(device)
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
@@ -646,7 +670,6 @@ class IncrementalCorefModel(CorefModel):
 
         losses = []
         for emb, span_start, span_end, in zip(top_span_emb, top_span_starts, top_span_ends):
-            print(span_start, labels_for_starts)
             gold_class = labels_for_starts.get(span_start)
             if entities_emb.shape[0] == 0:
                 entities_emb = emb.unsqueeze(0).to(device)
@@ -654,32 +677,34 @@ class IncrementalCorefModel(CorefModel):
                 entities_speaker = speaker_ids[span_start].unsqueeze(0).to(device)
                 entities_mention_distance = torch.zeros(1).unsqueeze(0).type(torch.long).to(device)
                 class_most_recent_entity[gold_class] = 0
-                continue
-            feature_list = []
-            if conf['use_metadata']:
-                top_span_speaker_ids = speaker_ids[span_start]
-                same_speaker = entities_speaker == top_span_speaker_ids
-                same_speaker_emb = self.emb_same_speaker(same_speaker.type(torch.long))
-                genre_emb = self.emb_genre(genre)
-                feature_list.append(same_speaker_emb.reshape(len(same_speaker), conf['feature_emb_size']))
-                feature_list.append(genre_emb.repeat(feature_list[0].shape[0]).reshape(-1, conf['feature_emb_size']))
-            if conf['use_segment_distance']:
-                seg_distance_emb = self.emb_segment_distance(sentence_distance.type(torch.long))
-                feature_list.append(seg_distance_emb.reshape(-1, conf['feature_emb_size']))
-            if conf['use_features']:
-                dists = util.bucket_distance(entities_mention_distance)
-                emb_dists = self.emb_top_antecedent_distance(dists.type(torch.long))
-                feature_list.append(emb_dists.reshape(-1, conf['feature_emb_size']))
-            feature_emb = torch.cat(feature_list, dim=1)
-            feature_emb = self.dropout(feature_emb)
-            embs = emb.repeat(entities_emb.shape[0], 1)
-            similarity_emb = embs * entities_emb
-            pair_emb = torch.cat([embs, entities_emb, similarity_emb, feature_emb], 1)
-            original_scores = self.coref_score_ffnn(pair_emb)
-            scores = torch.cat([new_cluster_threshold, original_scores])
-            dist = torch.softmax(scores, 0)
+                cluster_to_update = 1
+            else:
+                feature_list = []
+                if conf['use_metadata']:
+                    top_span_speaker_ids = speaker_ids[span_start]
+                    same_speaker = entities_speaker == top_span_speaker_ids
+                    same_speaker_emb = self.emb_same_speaker(same_speaker.type(torch.long))
+                    genre_emb = self.emb_genre(genre)
+                    feature_list.append(same_speaker_emb.reshape(len(same_speaker), conf['feature_emb_size']))
+                    feature_list.append(genre_emb.repeat(feature_list[0].shape[0]).reshape(-1, conf['feature_emb_size']))
+                if conf['use_segment_distance']:
+                    seg_distance_emb = self.emb_segment_distance(sentence_distance.type(torch.long))
+                    feature_list.append(seg_distance_emb.reshape(-1, conf['feature_emb_size']))
+                if conf['use_features']:
+                    dists = util.bucket_distance(entities_mention_distance)
+                    emb_dists = self.emb_top_antecedent_distance(dists.type(torch.long))
+                    feature_list.append(emb_dists.reshape(-1, conf['feature_emb_size']))
+                feature_emb = torch.cat(feature_list, dim=1)
+                feature_emb = self.dropout(feature_emb)
+                embs = emb.repeat(entities_emb.shape[0], 1)
+                similarity_emb = embs * entities_emb
+                pair_emb = torch.cat([embs, entities_emb, similarity_emb, feature_emb], 1)
+                original_scores = self.coref_score_ffnn(pair_emb)
+                scores = torch.cat([new_cluster_threshold, original_scores])
+                dist = torch.softmax(scores, 0)
 
-            cluster_to_update = dist.argmax()
+                cluster_to_update = dist.argmax()
+
             if gold_class:
                 target = torch.tensor([class_most_recent_entity.get(gold_class, -1) + 1]).to(device)
                 loss = self.class_loss(scores.squeeze(), target)
@@ -694,15 +719,37 @@ class IncrementalCorefModel(CorefModel):
                 entities_speaker = torch.cat([entities_speaker, speaker_ids[span_start].unsqueeze(0).to(device)])
                 entities_mention_distance = torch.cat([entities_mention_distance, torch.zeros(1).unsqueeze(0).to(device)])
                 class_most_recent_entity[gold_class] = entities_emb.shape[0] - 1
+                mention_to_cluster_id[(span_start.item(), span_end.item())] = entities_emb.shape[0] - 1
             else:
                 cluster_to_update -= 1
                 class_most_recent_entity[gold_class] = cluster_to_update
+                mention_to_cluster_id[(span_start.item(), span_end.item())] = cluster_to_update
+                # update_value = torch.sigmoid(self.entity_representation_gate(torch.cat(emb, span_repr)))
+                # entity_repr = update_value * entity_repr + (torch.tensor(1) - update_value) * span_repr
             entities_mention_distance += 1
-        print('LOSSES', len(losses), sum(losses))
-        return None, sum(losses) if len(losses) > 0 else torch.tensor(0.0, requires_grad=True)
+
+        sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
+        predicted_clusters = defaultdict(list)
+        for cluster, span in sorted_clusters:
+            predicted_clusters[cluster].append(span)
+        predicted_clusters = [v for k, v in predicted_clusters.items()]
+        out = [
+            candidate_spans['candidate_starts'],
+            candidate_spans['candidate_ends'],
+            top_spans['candidate_mention_scores'],
+            top_spans['starts'],
+            top_spans['ends'],
+            mention_to_cluster_id,
+            predicted_clusters,  # top_antecedent_scores
+        ]
+        if do_loss:
+            return (
+                out,
+                sum(losses) if len(losses) > 0 else torch.tensor(0.0, requires_grad=True)
+            )
+        else:
+            return out
         # where not update in this iteartion:
         # sentence_distance[1:] += 1
 
-        # update_value = torch.sigmoid(self.entity_representation_gate(torch.cat(entity_repr, span_repr)))
-        # entity_repr = update_value * entity_repr + (torch.tensor(1) - update_value) * span_repr
         # TODO set last entity occurences to negative values to support differences between increments

@@ -13,7 +13,7 @@ from os.path import join
 from metrics import CorefEvaluator
 from datetime import datetime
 from torch.optim.lr_scheduler import LambdaLR
-from model import CorefModel
+from model import CorefModel, IncrementalCorefModel
 import conll
 import sys
 import gc
@@ -50,7 +50,10 @@ class Runner:
         self.data = CorefDataProcessor(self.config)
 
     def initialize_model(self, saved_suffix=None):
-        model = CorefModel(self.config, self.device)
+        if self.config['incremental']:
+            model = IncrementalCorefModel(self.config, self.device)
+        else:
+            model = CorefModel(self.config, self.device)
         if saved_suffix:
             self.load_model_checkpoint(model, saved_suffix)
         return model
@@ -167,12 +170,26 @@ class Runner:
             gold_clusters = stored_info['gold'][doc_key]
             tensor_example = tensor_example[:7]  # Strip out gold
             example_gpu = [d.to(self.device) for d in tensor_example]
-            with torch.no_grad():
-                _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)
-            span_starts, span_ends = span_starts.tolist(), span_ends.tolist()
-            antecedent_idx, antecedent_scores = antecedent_idx.tolist(), antecedent_scores.tolist()
-            predicted_clusters = model.update_evaluator(span_starts, span_ends, antecedent_idx, antecedent_scores, gold_clusters, evaluator)
-            doc_to_prediction[doc_key] = predicted_clusters
+            if self.config["incremental"]:
+                with torch.no_grad():
+                    _, _, _, span_starts, span_ends, mention_to_cluster_id, predicted_clusters = model(*example_gpu)
+                    # import ipdb; ipdb.set_trace()
+                    model.update_evaluator(
+                        span_starts,
+                        span_ends,
+                        predicted_clusters,
+                        mention_to_cluster_id,
+                        gold_clusters,
+                        evaluator,
+                    )
+                    doc_to_prediction[doc_key] = predicted_clusters
+            else:
+                with torch.no_grad():
+                    _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)
+                span_starts, span_ends = span_starts.tolist(), span_ends.tolist()
+                antecedent_idx, antecedent_scores = antecedent_idx.tolist(), antecedent_scores.tolist()
+                predicted_clusters = model.update_evaluator(span_starts, span_ends, antecedent_idx, antecedent_scores, gold_clusters, evaluator)
+                doc_to_prediction[doc_key] = predicted_clusters
 
         p, r, f = evaluator.get_prf()
         metrics = {'Eval_Avg_Precision': p * 100, 'Eval_Avg_Recall': r * 100, 'Eval_Avg_F1': f * 100}
