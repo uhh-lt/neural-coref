@@ -17,6 +17,7 @@ from model import CorefModel, IncrementalCorefModel
 import conll
 import sys
 import gc
+from tqdm import tqdm
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -98,6 +99,7 @@ class Runner:
         max_f1 = 0
         start_time = time.time()
         model.zero_grad()
+        pbar = tqdm(total=len(examples_train) * epochs)
         for epo in range(epochs):
             random.shuffle(examples_train)  # Shuffle training set
             for doc_key, example in examples_train:
@@ -151,6 +153,7 @@ class Runner:
                             self.save_model_checkpoint(model, len(loss_history))
                         logger.info('Eval max f1: %.2f' % max_f1)
                         start_time = time.time()
+                pbar.update()
 
         logger.info('**********Finished training**********')
         logger.info('Actual update steps: %d' % len(loss_history))
@@ -166,7 +169,7 @@ class Runner:
         doc_to_prediction = {}
 
         model.eval()
-        for i, (doc_key, tensor_example) in enumerate(tensor_examples):
+        for i, (doc_key, tensor_example) in tqdm(enumerate(tensor_examples), total=len(tensor_examples)):
             gold_clusters = stored_info['gold'][doc_key]
             tensor_example = tensor_example[:7]  # Strip out gold
             example_gpu = [d.to(self.device) for d in tensor_example]
