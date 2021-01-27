@@ -111,12 +111,16 @@ class Runner:
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
                     loss /= grad_accum
-                loss.backward()
+                if not conf["incremental"]:
+                    loss.backward()
                 if conf['max_grad_norm']:
                     torch.nn.utils.clip_grad_norm_(bert_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(task_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(incremental_param, conf['max_grad_norm'])
-                loss_during_accum.append(loss.item())
+                if not conf["incremental"]:
+                    loss_during_accum.append(loss.item())
+                else:
+                    loss_during_accum.append(loss)
 
                 # Update
                 if len(loss_during_accum) % grad_accum == 0:

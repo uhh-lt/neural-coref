@@ -64,3 +64,10 @@ def batch_select(tensor, idx, device=torch.device('cpu')):
         selected = torch.squeeze(selected, -1)
 
     return selected
+
+def cuda_allocated_memory():
+    giga_byte = 1073741824  # 1024**3
+    if torch.cuda.is_available():
+        return torch.cuda.memory_allocated() / giga_byte
+    else:
+        return 0.0

@@ -660,7 +660,6 @@ class IncrementalCorefModel(CorefModel):
             gold_info = None
             labels_for_starts = {}
 
-        entities = [torch.zeros(self.config['feature_emb_size'], dtype=torch.float, device=device)]
         candidate_spans = self.get_candidate_spans(num_words, sentence_map, gold_info, device=device)
         candidate_span_emb = torch.cat(self.build_candidate_embeddings(mention_doc, candidate_spans, device=device), dim=1)  # [num candidates, new emb size]
 
@@ -678,12 +677,12 @@ class IncrementalCorefModel(CorefModel):
             top_span_emb = top_span_emb.unsqueeze(0)
 
         losses = []
+        cpu_loss = 0.0
         for emb, span_start, span_end, mention_score in zip(top_span_emb, top_span_starts, top_span_ends, top_spans['mention_scores']):
             gold_class = labels_for_starts.get(span_start.item())
             if entities_emb.shape[0] == 0:
                 entities_emb = emb.unsqueeze(0).to(device)
                 sentence_distance = torch.zeros(1).unsqueeze(0).to(device)
-                entities_speaker = speaker_ids[span_start].unsqueeze(0).to(device)
                 entities_mention_distance = torch.zeros(1).unsqueeze(0).type(torch.long).to(device)
                 class_most_recent_entity[gold_class] = 0
                 mention_to_cluster_id[(span_start.item(), span_end.item())] = 0
@@ -691,11 +690,9 @@ class IncrementalCorefModel(CorefModel):
             else:
                 feature_list = []
                 if conf['use_metadata']:
-                    top_span_speaker_ids = speaker_ids[span_start]
-                    same_speaker = entities_speaker == top_span_speaker_ids
-                    same_speaker_emb = self.emb_same_speaker(same_speaker.type(torch.long))
+                    same_speaker_emb = torch.zeros(conf['feature_emb_size'], device=self.device)
                     genre_emb = self.emb_genre(genre)
-                    feature_list.append(same_speaker_emb.reshape(len(same_speaker), conf['feature_emb_size']))
+                    feature_list.append(same_speaker_emb.repeat(entities_emb.shape[0]).reshape(-1, conf['feature_emb_size']))
                     feature_list.append(genre_emb.repeat(feature_list[0].shape[0]).reshape(-1, conf['feature_emb_size']))
                 if conf['use_segment_distance']:
                     seg_distance_emb = self.emb_segment_distance(sentence_distance.type(torch.long))
@@ -730,6 +727,10 @@ class IncrementalCorefModel(CorefModel):
                     target = torch.tensor([0]).to(device)
                     loss = self.class_loss(scores.T, target)
                     losses.append(loss)
+                if util.cuda_allocated_memory() > conf['memory_limit'] and len(losses) > 0:
+                    sum(losses).backward(retain_graph=True)
+                    cpu_loss += sum(losses).item()
+                    losses = []
 
                 # if index_to_update == 0:
                 #     print(f'Creating new cluster for entity of gold class {gold_class}')
@@ -740,7 +741,6 @@ class IncrementalCorefModel(CorefModel):
                 if index_to_update == 0:
                     entities_emb = torch.cat([entities_emb, emb.unsqueeze(0)])
                     sentence_distance = torch.cat([sentence_distance, torch.zeros(1).unsqueeze(0).to(device)])
-                    entities_speaker = torch.cat([entities_speaker, speaker_ids[span_start].unsqueeze(0).to(device)])
                     entities_mention_distance = torch.cat([entities_mention_distance, torch.zeros(1).unsqueeze(0).to(device)])
                     if gold_class:
                         class_most_recent_entity[gold_class] = entities_emb.shape[0] - 1
@@ -750,7 +750,15 @@ class IncrementalCorefModel(CorefModel):
                         class_most_recent_entity[gold_class] = cluster_to_update.item()
                     mention_to_cluster_id[(span_start.item(), span_end.item())] = cluster_to_update.item()
                     # High values in update gate mean the old representation is mostly replaced
-                    update_gate = torch.sigmoid(self.entity_representation_gate(torch.cat([emb, entities_emb[cluster_to_update]])))
+                    update_gate = torch.sigmoid(
+                        self.entity_representation_gate(torch.cat(
+                            [
+                                emb,
+                                entities_emb[cluster_to_update],
+                                # original_scores[cluster_to_update],
+                                # torch.softmax(original_scores, 0)[cluster_to_update],
+                            ],
+                        )))
                     entities_emb = entities_emb.clone()
                     entities_emb[cluster_to_update] = update_gate * emb + (torch.tensor(1) - update_gate) * entities_emb[cluster_to_update].clone()
                     entities_mention_distance[cluster_to_update] = 0
@@ -774,10 +782,13 @@ class IncrementalCorefModel(CorefModel):
             mention_to_cluster_id,
             predicted_clusters,
         ]
+        if len(losses) > 0:
+            sum(losses).backward(retain_graph=True)
+            cpu_loss += sum(losses).item()
         if do_loss:
             return (
                 out,
-                sum(losses) if len(losses) > 0 else torch.tensor(0.0, requires_grad=True)
+                cpu_loss,
             )
         else:
             return out
