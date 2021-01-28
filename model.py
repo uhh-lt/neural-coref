@@ -670,11 +670,35 @@ class IncrementalCorefModel(CorefModel):
         mention_to_cluster_id = {}
 
         entities_emb = torch.tensor([]).to(device)
+        entities_count = torch.tensor([]).to(device)
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
         class_most_recent_entity = {}
 
         if len(top_span_emb.shape) == 1:
             top_span_emb = top_span_emb.unsqueeze(0)
+
+        def evict(entities, class_most_recent_entity, entities_mention_distance, sentence_distance):
+            """
+            Evicts entities that are older than the specified thresholds.
+            """
+            offset = 0
+            for i, distance in enumerate(entities_mention_distance.clone()):
+                distance = distance.item()
+                if (distance > conf['unconditional_eviction_limit'] or (distance > conf['singleton_eviction_limit'] and entities_count[i] == 1)) and len(entities) > 1:
+                    entities = torch.cat([entities[:i - offset], entities[i + 1 - offset:]], 0).to(self.device)
+                    sentence_distance = torch.cat([sentence_distance[:i - offset], sentence_distance[i + 1 - offset:]], 0).to(self.device)
+                    entities_mention_distance = torch.cat([entities_mention_distance[:i - offset], entities_mention_distance[i + 1 - offset:]], 0).to(self.device)
+                    new_classes = {}
+                    for class_, entity_index in class_most_recent_entity.items():
+                        if entity_index == i - offset:
+                            pass
+                        elif entity_index > i - offset:
+                            new_classes[class_] = entity_index - 1
+                        else:
+                            new_classes[class_] = entity_index
+                    class_most_recent_entity = new_classes
+                    offset += 1
+            return entities, class_most_recent_entity, entities_mention_distance, sentence_distance
 
         losses = []
         cpu_loss = 0.0
@@ -682,12 +706,20 @@ class IncrementalCorefModel(CorefModel):
             gold_class = labels_for_starts.get(span_start.item())
             if entities_emb.shape[0] == 0:
                 entities_emb = emb.unsqueeze(0).to(device)
+                entities_count = torch.ones(1).to(device)
                 sentence_distance = torch.zeros(1).unsqueeze(0).to(device)
                 entities_mention_distance = torch.zeros(1).unsqueeze(0).type(torch.long).to(device)
                 class_most_recent_entity[gold_class] = 0
                 mention_to_cluster_id[(span_start.item(), span_end.item())] = 0
                 scores = None
             else:
+                if conf['evict']:
+                    entities_emb, class_most_recent_entity, entities_mention_distance, sentence_distance = evict(
+                        entities_emb,
+                        class_most_recent_entity,
+                        entities_mention_distance,
+                        sentence_distance,
+                    )
                 feature_list = []
                 if conf['use_metadata']:
                     same_speaker_emb = torch.zeros(conf['feature_emb_size'], device=self.device)
@@ -740,6 +772,7 @@ class IncrementalCorefModel(CorefModel):
 
                 if index_to_update == 0:
                     entities_emb = torch.cat([entities_emb, emb.unsqueeze(0)])
+                    entities_count = torch.cat([entities_count, torch.ones(1, device=self.device)])
                     sentence_distance = torch.cat([sentence_distance, torch.zeros(1).unsqueeze(0).to(device)])
                     entities_mention_distance = torch.cat([entities_mention_distance, torch.zeros(1).unsqueeze(0).to(device)])
                     if gold_class:
@@ -761,6 +794,7 @@ class IncrementalCorefModel(CorefModel):
                         )))
                     entities_emb = entities_emb.clone()
                     entities_emb[cluster_to_update] = update_gate * emb + (torch.tensor(1) - update_gate) * entities_emb[cluster_to_update].clone()
+                    entities_count[cluster_to_update] += 1
                     entities_mention_distance[cluster_to_update] = 0
                 entities_mention_distance += 1
 
