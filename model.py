@@ -122,7 +122,7 @@ class CorefModel(nn.Module):
         if conf["model_type"] == "electra":
             mention_doc = self.bert(input_ids, attention_mask=input_mask)[0]
         else:
-            mention_doc, _ = self.bert(input_ids, attention_mask=input_mask)  # [num seg, num max tokens, emb size]
+            mention_doc = self.bert(input_ids, attention_mask=input_mask)[0]  # [num seg, num max tokens, emb size]
         input_mask = input_mask.to(torch.bool)
         mention_doc = mention_doc[input_mask]
         speaker_ids = speaker_ids[input_mask]
