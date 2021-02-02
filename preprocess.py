@@ -66,7 +66,7 @@ class DocumentState(object):
         self.clusters = collections.defaultdict(list)  # {cluster_id: [(first_subtok_idx, last_subtok_idx) for each mention]}
         self.coref_stacks = collections.defaultdict(list)
 
-    def finalize(self):
+    def finalize(self, input_format):
         """ Extract clusters; fill other info e.g. speakers, pronouns """
         # Populate speakers from info
         subtoken_idx = 0
@@ -90,7 +90,7 @@ class DocumentState(object):
             for i, subtoken_info in enumerate(seg_info):
                 first_subtoken_idx += 1
                 coref = subtoken_info[-2] if subtoken_info is not None else '-'
-                if coref != '-':
+                if coref != '-' and coref != '_':
                     last_subtoken_idx = first_subtoken_idx + subtoken_info[-1] - 1
                     for part in coref.split('|'):
                         if part[0] == '(':
@@ -182,10 +182,12 @@ def split_into_segments(document_state: DocumentState, max_seg_len, constraints1
         prev_token_idx = subtoken_map[-1]
 
 
-def get_document(doc_key, doc_lines, language, seg_len, tokenizer):
+def get_document(doc_key, doc_lines, language, seg_len, tokenizer, input_format):
     """ Process raw input to finalized documents """
     document_state = DocumentState(doc_key)
     word_idx = -1
+
+    word_col = 3 if input_format == 'conll-2012' else 1
 
     # Build up documents
     for line in doc_lines:
@@ -195,7 +197,7 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer):
         else:
             assert len(row) >= 12
             word_idx += 1
-            word = normalize_word(row[3], language)
+            word = normalize_word(row[word_col], language)
             subtokens = tokenizer.tokenize(word)
             document_state.tokens.append(word)
             document_state.token_end += [False] * (len(subtokens) - 1) + [True]
@@ -209,7 +211,7 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer):
     # Split documents
     constraits1 = document_state.sentence_end if language != 'arabic' else document_state.token_end
     split_into_segments(document_state, seg_len, constraits1, document_state.token_end, tokenizer)
-    document = document_state.finalize()
+    document = document_state.finalize(input_format)
     return document
 
 
@@ -237,7 +239,7 @@ def minimize_partition(partition, extension, args, tokenizer):
         for doc_key, doc_lines in documents:
             if skip_doc(doc_key):
                 continue
-            document = get_document(doc_key, doc_lines, args.language, args.seg_len, tokenizer)
+            document = get_document(doc_key, doc_lines, args.language, args.seg_len, tokenizer, args.input_format)
             output_file.write(json.dumps(document))
             output_file.write('\n')
             doc_count += 1
@@ -250,9 +252,9 @@ def minimize_language(args):
     else:
         tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name)
 
-    minimize_partition('dev', 'tuebdz_gold_conll', args, tokenizer)
-    minimize_partition('test', 'tuebdz_gold_conll', args, tokenizer)
-    minimize_partition('train', 'tuebdz_gold_conll', args, tokenizer)
+    minimize_partition('dev', args.input_suffix, args, tokenizer)
+    minimize_partition('test', args.input_suffix, args, tokenizer)
+    minimize_partition('train', args.input_suffix, args, tokenizer)
 
 
 if __name__ == '__main__':
@@ -270,6 +272,9 @@ if __name__ == '__main__':
     parser.add_argument('--model_type', type=str, default='bert')
     # parser.add_argument('--lower_case', action='store_true',
     #                     help='Do lower case on input')
+    parser.add_argument('--input_suffix', type=str, default='v4_gold_conll')
+    parser.add_argument('--input_format', type=str, default='conll-2012',
+                        help='Input format conll-2012 (default) or semeval-2010')
 
     args = parser.parse_args()
     logger.info(args)
