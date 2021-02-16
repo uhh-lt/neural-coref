@@ -154,7 +154,7 @@ class Runner:
         tb_writer.close()
         return loss_history
 
-    def evaluate(self, model, tensor_examples, stored_info, step, official=False, conll_path=None, tb_writer=None):
+    def evaluate(self, model, tensor_examples, stored_info, step, official=False, conll_path=None, tb_writer=None, out_file=None):
         logger.info('Step %d: evaluating on %d samples...' % (step, len(tensor_examples)))
         model.to(self.device)
         evaluator = CorefEvaluator()
@@ -180,7 +180,7 @@ class Runner:
                 tb_writer.add_scalar(name, score, step)
 
         if official:
-            conll_results = conll.evaluate_conll(conll_path, doc_to_prediction, stored_info['subtoken_maps'])
+            conll_results = conll.evaluate_conll(conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
             official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
             logger.info('Official avg F1: %.4f' % official_f1)
 

@@ -51,7 +51,7 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
             output_file.write("\n")
         else:
             # assert get_doc_key(row[0], row[1]) == doc_key
-            assert "_".join(row[0].split(".")) == doc_key
+            # assert "_".join(row[0].split(".")) == doc_key
             row[3] = REMOVE_MENTION_MARKUP.sub(r"\1", row[3])
             row[6] = REMOVE_MENTION_MARKUP.sub(r"\1", row[6])
             coref_list = []
@@ -96,8 +96,8 @@ def official_conll_eval(gold_path, predicted_path, metric, official_stdout=True)
     return {"r": recall, "p": precision, "f": f1}
 
 
-def evaluate_conll(gold_path, predictions, subtoken_maps, official_stdout=True):
-    with tempfile.NamedTemporaryFile(delete=True, mode="w") as prediction_file:
+def evaluate_conll(gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True):
+    with open(out_file, "w") if out_file is not None else tempfile.NamedTemporaryFile(delete=True, mode="w") as prediction_file:
         with open(gold_path, "r") as gold_file:
             output_conll(gold_file, prediction_file, predictions, subtoken_maps)
         # logger.info("Predicted conll file: {}".format(prediction_file.name))
