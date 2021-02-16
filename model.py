@@ -622,55 +622,71 @@ class IncrementalCorefModel(CorefModel):
 
     def get_predictions_incremental(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                     is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
-        max_size = 5
+        max_segments = 5
+        segment_size = input_ids.shape[-1]
 
         candidate_spans_starts = []
         candidate_spans_ends = []
         mention_scores = []
         top_starts = []
         top_ends = []
-        mention_to_cluster_id = []
+        mention_to_cluster_id = {}
         predicted_clusters = []
+        entities = None
 
-        for i, start in enumerate(range(0, input_ids.shape[0], max_size)):
-            end = start + max_size
+        for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
+            end = start + max_segments
             genre
             is_training
             if gold_starts is not None:
                 windowed_gold_starts = []
                 for gold_start in gold_starts:
-                    start_offset = (input_ids.shape[-1] * max_size) * i
-                    end_offset = start_offset + (input_ids.shape[-1] * max_size)
+                    start_offset = (segment_size * max_segments) * i
+                    end_offset = start_offset + (segment_size * max_segments)
                     if start_offset <= gold_start and end_offset > gold_start:
-                        windowed_gold_starts.append(gold_start % (input_ids.shape[-1] * max_size))
+                        windowed_gold_starts.append(gold_start % (segment_size * max_segments))
             if gold_ends is not None:
                 windowed_gold_ends = []
                 for gold_end in gold_ends:
-                    start_offset = (input_ids.shape[-1] * max_size) * i
-                    end_offset = start_offset + (input_ids.shape[-1] * max_size)
+                    start_offset = (segment_size * max_segments) * i
+                    end_offset = start_offset + (segment_size * max_segments)
                     if start_offset <= gold_end and end_offset > gold_end:
-                        windowed_gold_ends.append(gold_end % (input_ids.shape[-1] * max_size))
-            out, loss = self.get_predictions_incremental_internal(
+                        windowed_gold_ends.append(gold_end % (segment_size * max_segments))
+            out, entities, loss = self.get_predictions_incremental_internal(
                 input_ids[start:end],
                 input_mask[start:end],
                 speaker_ids[start:end],
                 sentence_len[start:end],
                 genre,
-                sentence_map[i * input_ids.shape[-1]: i + max_size * input_ids.shape[-1]],
+                sentence_map[i * segment_size: i + max_segments * segment_size],
                 is_training,
-                gold_starts=torch.tensor(windowed_gold_starts) if gold_starts is not None else None,
-                gold_ends=torch.tensor(windowed_gold_ends) if gold_ends is not None else None,
+                gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
+                gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
                 gold_mention_cluster_map=gold_mention_cluster_map,
+                entities=entities
             )
-            (
-                candidate_spans_starts,
-                candidate_spans_ends,
-                mention_scores,
-                top_starts,
-                top_ends,
-                mention_to_cluster_id,
-                predicted_clusters,
-            ) = out
+            candidate_spans_starts.extend(out[0] + i * segment_size)
+            candidate_spans_ends.extend(out[1] + i * segment_size)
+            mention_scores.extend(out[2])
+            top_starts.extend(out[3] + i * segment_size)
+            top_ends.extend(out[4] + i * segment_size)
+            mention_to_cluster_id.update(
+                {(k[0] + i * segment_size, k[1] + i * segment_size) for k, v in out[5].items()}
+            )
+            sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
+            predicted_clusters_dict = defaultdict(list)
+            for cluster, span in sorted_clusters:
+                predicted_clusters_dict[cluster].append(span)
+            predicted_clusters = [v for k, v in predicted_clusters_dict.items()]
+        out = (
+            candidate_spans_starts,
+            candidate_spans_ends,
+            mention_scores,
+            top_starts,
+            top_ends,
+            mention_to_cluster_id,
+            predicted_clusters
+        )
         return out, loss
 
     def get_predictions_incremental_internal(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
@@ -859,15 +875,17 @@ class IncrementalCorefModel(CorefModel):
                     entities['mention_distance'][cluster_to_update] = 0
                 entities['mention_distance'] += 1
 
-        sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
-        predicted_clusters = defaultdict(list)
-        for cluster, span in sorted_clusters:
-            predicted_clusters[cluster].append(span)
-        predicted_clusters = [v for k, v in predicted_clusters.items() if len(v) > 1]
-        mention_to_cluster_id = {}
-        for i, cluster in enumerate(predicted_clusters):
-            for span in cluster:
-                mention_to_cluster_id[span] = i
+        # Remove singleton clusters
+        # sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
+        # predicted_clusters = defaultdict(list)
+        # for cluster, span in sorted_clusters:
+        #     predicted_clusters[cluster].append(span)
+        # predicted_clusters = [v for k, v in predicted_clusters.items() if len(v) > 1]
+        # mention_to_cluster_id = {}
+        # for i, cluster in enumerate(predicted_clusters):
+        #     for span in cluster:
+        #         mention_to_cluster_id[span] = i
+
         out = [
             candidate_spans['candidate_starts'],
             candidate_spans['candidate_ends'],
@@ -875,7 +893,6 @@ class IncrementalCorefModel(CorefModel):
             top_spans['starts'],
             top_spans['ends'],
             mention_to_cluster_id,
-            predicted_clusters,
         ]
         if len(losses) > 0:
             sum(losses).backward(retain_graph=True)
@@ -883,10 +900,11 @@ class IncrementalCorefModel(CorefModel):
         if do_loss:
             return (
                 out,
+                entities,
                 cpu_loss,
             )
         else:
-            return out
+            return out, entities
         # where not update in this iteartion:
         # sentence_distance[1:] += 1
 
