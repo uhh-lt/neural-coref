@@ -75,8 +75,8 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
             word_index += 1
 
 
-def official_conll_eval(gold_path, predicted_path, metric, official_stdout=True):
-    cmd = ["data/reference-coreference-scorers/v8.01/scorer.pl", metric, gold_path, predicted_path, "none"]
+def official_conll_eval(conll_scorer, gold_path, predicted_path, metric, official_stdout=True):
+    cmd = [conll_scorer, metric, gold_path, predicted_path, "none"]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     stdout, stderr = process.communicate()
     process.wait()
@@ -96,10 +96,10 @@ def official_conll_eval(gold_path, predicted_path, metric, official_stdout=True)
     return {"r": recall, "p": precision, "f": f1}
 
 
-def evaluate_conll(gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True):
+def evaluate_conll(conll_scorer, gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True):
     with open(out_file, "w") if out_file is not None else tempfile.NamedTemporaryFile(delete=True, mode="w") as prediction_file:
         with open(gold_path, "r") as gold_file:
             output_conll(gold_file, prediction_file, predictions, subtoken_maps)
         # logger.info("Predicted conll file: {}".format(prediction_file.name))
-        results = {m: official_conll_eval(gold_file.name, prediction_file.name, m, official_stdout) for m in ("muc", "bcub", "ceafe") }
+        results = {m: official_conll_eval(conll_scorer, gold_file.name, prediction_file.name, m, official_stdout) for m in ("muc", "bcub", "ceafe") }
     return results

@@ -180,7 +180,7 @@ class Runner:
                 tb_writer.add_scalar(name, score, step)
 
         if official:
-            conll_results = conll.evaluate_conll(conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
+            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
             official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
             logger.info('Official avg F1: %.4f' % official_f1)
 
@@ -273,7 +273,8 @@ class Runner:
         if step < 10000:
             logger.info('Skipping model saving, we are very early in training!')
             return  # Debug
-        path_ckpt = join(self.config['log_dir'], f'model_{self.name_suffix}_{step}.bin')
+        self.last_save_suffix = f'{self.name}_{self.name_suffix}_{step}'
+        path_ckpt = join(self.config['log_dir'], f'model_{self.last_save_suffix}.bin')
         torch.save(model.state_dict(), path_ckpt)
         logger.info('Saved model to %s' % path_ckpt)
 
@@ -289,3 +290,14 @@ if __name__ == '__main__':
     model = runner.initialize_model()
 
     runner.train(model)
+
+    runner.load_model_checkpoint(model, runner.last_save_suffix)
+
+    examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
+    stored_info = runner.data.get_stored_info()
+
+    path_dev_pred = join(self.config['log_dir'], f'dev_{self.last_save_suffix}.prediction')
+    path_test_pred = join(self.config['log_dir'], f'test_{self.last_save_suffix}.prediction')
+    runner.evaluate(model, examples_dev, stored_info, 0, official=True, conll_path=runner.config['conll_eval_path'], out_file=path_dev_pred)  # Eval dev
+    model.eval_only = True
+    runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=runner.config['conll_test_path'], out_file=path_test_pred)  # Eval test

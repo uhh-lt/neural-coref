@@ -19,6 +19,7 @@ class CorefModel(nn.Module):
     def __init__(self, config, device, num_genres=None):
         super().__init__()
         self.config = config
+        self.eval_only = False
         self.device = device
 
         self.num_genres = num_genres if num_genres else len(config['genres'])
@@ -128,7 +129,8 @@ class CorefModel(nn.Module):
         speaker_ids = speaker_ids[input_mask]
         num_words = mention_doc.shape[0]
 
-        if sentence_len.shape[0] > 10:
+        if not self.eval_only and not self.training and sentence_len.shape[0] > conf['doc_max_segments']:
+            logger.warn('Not predicting document longer than doc_max_segments')
             return [
                 None,
                 None,
