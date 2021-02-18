@@ -904,8 +904,7 @@ class IncrementalCorefModel(CorefModel):
                 cpu_loss,
             )
         else:
-            return out, entities
+            return out, entities, torch.tensor([0.0], requires_grad=True)
         # where not update in this iteartion:
         # sentence_distance[1:] += 1
-
         # TODO set last entity occurences to negative values to support differences between increments
