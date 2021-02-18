@@ -7,7 +7,7 @@ from collections import Iterable, defaultdict
 import numpy as np
 import torch.nn.init as init
 import higher_order as ho
-from collections import defaultdict
+from entities import IncrementalEntities
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
@@ -340,15 +340,15 @@ class CorefModel(nn.Module):
             if conf['fine_grained'] and conf['higher_order'] == 'cluster_merging':
                 top_pairwise_scores += cluster_merging_scores
             top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)  # [num top spans, max top antecedents + 1]
-            return (
-                candidate_spans['candidate_starts'],
-                candidate_spans['candidate_ends'],
-                top_spans['mention_scores'],
-                top_spans['starts'],
-                top_spans['ends'],
+            return [
+                candidate_spans["candidate_starts"],
+                candidate_spans["candidate_ends"],
+                top_spans["mention_scores"],
+                top_spans["starts"],
+                top_spans["ends"],
                 top_antecedent_idx,
                 top_antecedent_scores,
-            )
+            ]
 
         # Get gold labels
         top_antecedent_cluster_ids = top_span_cluster_ids[top_antecedent_idx]
@@ -411,7 +411,7 @@ class CorefModel(nn.Module):
                     logger.info('loss: %.4f' % loss.item())
         self.update_steps += 1
 
-        return ([
+        return [
             candidate_spans['candidate_starts'],
             candidate_spans['candidate_ends'],
             top_spans['candidate_mention_scores'],
@@ -419,7 +419,7 @@ class CorefModel(nn.Module):
             top_spans['ends'],
             top_antecedent_idx,
             top_antecedent_scores
-        ], loss)
+        ], loss
 
     def _extract_top_spans(self, candidate_idx_sorted, candidate_starts, candidate_ends, num_top_spans):
         """ Keep top non-cross-overlapping candidates ordered by scores; compute on CPU because of loop """
@@ -625,19 +625,18 @@ class IncrementalCorefModel(CorefModel):
         max_segments = 5
         segment_size = input_ids.shape[-1]
 
-        candidate_spans_starts = []
-        candidate_spans_ends = []
-        mention_scores = []
-        top_starts = []
-        top_ends = []
         mention_to_cluster_id = {}
         predicted_clusters = []
         entities = None
 
+        do_loss = False
+        if gold_mention_cluster_map is not None:
+            assert gold_starts is not None
+            assert gold_ends is not None
+            do_loss = True
+
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
             end = start + max_segments
-            genre
-            is_training
             if gold_starts is not None:
                 windowed_gold_starts = []
                 for gold_start in gold_starts:
@@ -652,7 +651,7 @@ class IncrementalCorefModel(CorefModel):
                     end_offset = start_offset + (segment_size * max_segments)
                     if start_offset <= gold_end and end_offset > gold_end:
                         windowed_gold_ends.append(gold_end % (segment_size * max_segments))
-            out, entities, loss = self.get_predictions_incremental_internal(
+            res = self.get_predictions_incremental_internal(
                 input_ids[start:end],
                 input_mask[start:end],
                 speaker_ids[start:end],
@@ -663,49 +662,32 @@ class IncrementalCorefModel(CorefModel):
                 gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
                 gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
                 gold_mention_cluster_map=gold_mention_cluster_map,
-                entities=entities
+                entities=entities,
+                do_loss=do_loss,
+                offset=(i * segment_size)
             )
-            candidate_spans_starts.extend(out[0] + i * segment_size)
-            candidate_spans_ends.extend(out[1] + i * segment_size)
-            mention_scores.extend(out[2])
-            top_starts.extend(out[3] + i * segment_size)
-            top_ends.extend(out[4] + i * segment_size)
-            mention_to_cluster_id.update(
-                {(k[0] + i * segment_size, k[1] + i * segment_size) for k, v in out[5].items()}
-            )
-            sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
-            predicted_clusters_dict = defaultdict(list)
-            for cluster, span in sorted_clusters:
-                predicted_clusters_dict[cluster].append(span)
-            predicted_clusters = [v for k, v in predicted_clusters_dict.items()]
-        out = (
-            candidate_spans_starts,
-            candidate_spans_ends,
-            mention_scores,
-            top_starts,
-            top_ends,
+            if do_loss:
+                entities, loss = res
+            else:
+                entities = res
+        starts, ends, mention_to_cluster_id, predicted_clusters = entities.get_result()
+        out = [
+            starts,
+            ends,
             mention_to_cluster_id,
-            predicted_clusters
-        )
-        return out, loss
+            predicted_clusters,
+        ]
+        assert len(predicted_clusters) == (max(mention_to_cluster_id.values()) + 1)
+        if do_loss:
+            return out, loss
+        else:
+            return out
 
     def get_predictions_incremental_internal(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                              is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
-                                             entities=None):
+                                             entities=None, do_loss=None, offset=0):
         device = self.device
         conf = self.config
-
-        # TODO: we should be able to process such inputs (it is the whole point of the incremental model after all :D)
-        if input_ids.shape[0] > 7:
-            return [
-                None
-            ] * 5 + [{}, []]
-
-        do_loss = False
-        if gold_mention_cluster_map is not None:
-            assert gold_starts is not None
-            assert gold_ends is not None
-            do_loss = True
 
         # The model should already be trained so we detach the BERT part, massively improving performance
         if conf['model_type'] == 'electra':
@@ -736,89 +718,48 @@ class IncrementalCorefModel(CorefModel):
         top_spans = self.get_top_spans(candidate_span_emb, candidate_spans, num_words, do_loss=do_loss, device=device)
         top_span_starts, top_span_ends = top_spans['starts'], top_spans['ends']
         top_span_emb = top_spans['emb']
-        predicted_clusters = []
-        mention_to_cluster_id = {}
 
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
         class_most_recent_entity = {}
         if entities is None:
-            entities = {
-                'emb': torch.tensor([]).to(device),
-                'count': torch.tensor([]).to(device),
-                'class_most_recent_entity': class_most_recent_entity,
-                'mention_distance': None,
-                'sentence_distance': None,
-            }
+            entities = IncrementalEntities(conf, device)
 
         if len(top_span_emb.shape) == 1:
             top_span_emb = top_span_emb.unsqueeze(0)
-
-        def evict(entities, class_most_recent_entity, entities_mention_distance, sentence_distance):
-            """
-            Evicts entities that are older than the specified thresholds.
-            """
-            offset = 0
-            for i, distance in enumerate(entities_mention_distance.clone()):
-                distance = distance.item()
-                if (distance > conf['unconditional_eviction_limit'] or (distance > conf['singleton_eviction_limit'] and entities['count'][i] == 1)) and len(entities) > 1:
-                    entities = torch.cat([entities[:i - offset], entities[i + 1 - offset:]], 0).to(self.device)
-                    sentence_distance = torch.cat([sentence_distance[:i - offset], sentence_distance[i + 1 - offset:]], 0).to(self.device)
-                    entities_mention_distance = torch.cat([entities_mention_distance[:i - offset], entities_mention_distance[i + 1 - offset:]], 0).to(self.device)
-                    new_classes = {}
-                    for class_, entity_index in class_most_recent_entity.items():
-                        if entity_index == i - offset:
-                            pass
-                        elif entity_index > i - offset:
-                            new_classes[class_] = entity_index - 1
-                        else:
-                            new_classes[class_] = entity_index
-                    class_most_recent_entity = new_classes
-                    offset += 1
-            return entities, class_most_recent_entity, entities_mention_distance, sentence_distance
 
         losses = []
         cpu_loss = 0.0
         for emb, span_start, span_end, mention_score in zip(top_span_emb, top_span_starts, top_span_ends, top_spans['mention_scores']):
             gold_class = labels_for_starts.get((span_start.item(), span_end.item()))
-            if entities['emb'].shape[0] == 0:
-                entities['emb'] = emb.unsqueeze(0).to(device)
-                entities['count'] = torch.ones(1).to(device)
-                entities['class_most_recent_entity'][gold_class] = 0
-                entities['sentence_distance'] = torch.zeros(1).unsqueeze(0).to(device)
-                entities['mention_distance'] = torch.zeros(1).unsqueeze(0).type(torch.long).to(device)
-                mention_to_cluster_id[(span_start.item(), span_end.item())] = 0
-                scores = None
+            if len(entities) == 0:
+                # No need to do the whole similarity computation, this is the first mention
+                entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
             else:
                 if conf['evict']:
-                    entities['emb'], entities['class_most_recent_entity'], entities['mention_distance'], entities['sentence_distance'] = evict(
-                        entities['emb'],
-                        entities['class_most_recent_entity'],
-                        entities['mention_distance'],
-                        entities.get('sentence_distance'),
-                    )
+                    entities.evict()
                 feature_list = []
                 if conf['use_metadata']:
                     same_speaker_emb = torch.zeros(conf['feature_emb_size'], device=self.device)
                     genre_emb = self.emb_genre(genre)
-                    feature_list.append(same_speaker_emb.repeat(entities['emb'].shape[0]).reshape(-1, conf['feature_emb_size']))
+                    feature_list.append(same_speaker_emb.repeat(entities.emb.shape[0]).reshape(-1, conf['feature_emb_size']))
                     feature_list.append(genre_emb.repeat(feature_list[0].shape[0]).reshape(-1, conf['feature_emb_size']))
                 if conf['use_segment_distance']:
-                    seg_distance_emb = self.emb_segment_distance(entities['sentence_distance'].type(torch.long))
+                    seg_distance_emb = self.emb_segment_distance(entities.sentence_distance.type(torch.long))
                     feature_list.append(seg_distance_emb.reshape(-1, conf['feature_emb_size']))
                 if conf['use_features']:
-                    dists = util.bucket_distance(entities['mention_distance'])
+                    dists = util.bucket_distance(entities.mention_distance)
                     antecedent_distance_emb = self.emb_top_antecedent_distance(dists.type(torch.long))
                     feature_list.append(antecedent_distance_emb.reshape(-1, conf['feature_emb_size']))
                 fast_source_span_emb = self.dropout(self.coarse_bilinear(emb))
-                fast_entity_embs = self.dropout(torch.transpose(entities['emb'], 0, 1))
+                fast_entity_embs = self.dropout(torch.transpose(entities.emb, 0, 1))
                 fast_coref_scores = torch.matmul(fast_source_span_emb, fast_entity_embs).unsqueeze(-1)
-                # It's important for us to also involve the mention span scores, the only way to prune discovered spans is by turning them into singleton clusters
-                # This is encouraged by explicitly involving the sum of the mention scores
                 feature_emb = torch.cat(feature_list, dim=1)
                 feature_emb = self.dropout(feature_emb)
-                embs = emb.repeat(entities['emb'].shape[0], 1)
-                similarity_emb = embs * entities['emb']
-                pair_emb = torch.cat([embs, entities['emb'], similarity_emb, feature_emb], 1)
+                embs = emb.repeat(entities.emb.shape[0], 1)
+                similarity_emb = embs * entities.emb
+                pair_emb = torch.cat([embs, entities.emb, similarity_emb, feature_emb], 1)
+                # It's important for us to also involve the mention span scores, the only way to prune discovered spans is by turning them into singleton clusters
+                # This is encouraged by explicitly involving the sum of the mention scores
                 original_scores = self.coref_score_ffnn(pair_emb) + fast_coref_scores
                 scores = torch.cat([new_cluster_threshold, original_scores])
                 dist = torch.softmax(scores, 0)
@@ -838,73 +779,22 @@ class IncrementalCorefModel(CorefModel):
                     sum(losses).backward(retain_graph=True)
                     cpu_loss += sum(losses).item()
                     losses = []
-
-#                 if index_to_update == 0:
-#                     print(f'Creating new cluster for entity of gold class {gold_class}')
-#                 else:
-#                     print(f'Predicted {cluster_to_update}th cluster for entity of gold class {gold_class}.')
-#                 print(f'Last prediction for this class was cluster {class_most_recent_entity.get(gold_class)}')
-
                 if index_to_update == 0:
-                    entities['emb'] = torch.cat([entities['emb'], emb.unsqueeze(0)])
-                    entities['count'] = torch.cat([entities['count'], torch.ones(1, device=self.device)])
-                    entities['sentence_distance'] = torch.cat([entities['sentence_distance'], torch.zeros(1).unsqueeze(0).to(device)])
-                    entities['mention_distance'] = torch.cat([entities['mention_distance'], torch.zeros(1).unsqueeze(0).to(device)])
-                    if gold_class:
-                        class_most_recent_entity[gold_class] = entities['emb'].shape[0] - 1
-                    mention_to_cluster_id[(span_start.item(), span_end.item())] = entities['emb'].shape[0] - 1
+                    entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
                 else:
-                    if gold_class is not None:
-                        class_most_recent_entity[gold_class] = cluster_to_update.item()
-                    # else:
-                    #     print('Linking non-mention to existing cluster')
-                    mention_to_cluster_id[(span_start.item(), span_end.item())] = cluster_to_update.item()
-                    # High values in update gate mean the old representation is mostly replaced
                     update_gate = torch.sigmoid(
                         self.entity_representation_gate(torch.cat(
                             [
                                 emb,
-                                entities['emb'][cluster_to_update],
-                                # original_scores[cluster_to_update],
-                                # torch.softmax(original_scores, 0)[cluster_to_update],
+                                entities.emb[cluster_to_update],
                             ],
                         )))
-                    entities['emb'] = entities['emb'].clone()
-                    entities['emb'][cluster_to_update] = update_gate * emb + (torch.tensor(1) - update_gate) * entities['emb'][cluster_to_update].clone()
-                    entities['count'][cluster_to_update] += 1
-                    entities['mention_distance'][cluster_to_update] = 0
-                entities['mention_distance'] += 1
+                    entities.update_entity(cluster_to_update, emb, gold_class, span_start, span_end, update_gate, offset=offset)
 
-        # Remove singleton clusters
-        # sorted_clusters = sorted([(v, k) for k, v in mention_to_cluster_id.items()], key=lambda x: x[0])
-        # predicted_clusters = defaultdict(list)
-        # for cluster, span in sorted_clusters:
-        #     predicted_clusters[cluster].append(span)
-        # predicted_clusters = [v for k, v in predicted_clusters.items() if len(v) > 1]
-        # mention_to_cluster_id = {}
-        # for i, cluster in enumerate(predicted_clusters):
-        #     for span in cluster:
-        #         mention_to_cluster_id[span] = i
-
-        out = [
-            candidate_spans['candidate_starts'],
-            candidate_spans['candidate_ends'],
-            top_spans['candidate_mention_scores'],
-            top_spans['starts'],
-            top_spans['ends'],
-            mention_to_cluster_id,
-        ]
         if len(losses) > 0:
             sum(losses).backward(retain_graph=True)
             cpu_loss += sum(losses).item()
         if do_loss:
-            return (
-                out,
-                entities,
-                cpu_loss,
-            )
+            return entities, cpu_loss
         else:
-            return out, entities, torch.tensor([0.0], requires_grad=True)
-        # where not update in this iteartion:
-        # sentence_distance[1:] += 1
-        # TODO set last entity occurences to negative values to support differences between increments
+            return entities

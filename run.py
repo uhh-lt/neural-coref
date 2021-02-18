@@ -180,8 +180,7 @@ class Runner:
             example_gpu = [d.to(self.device) for d in tensor_example]
             if self.config["incremental"]:
                 with torch.no_grad():
-                    _, _, _, span_starts, span_ends, mention_to_cluster_id, predicted_clusters = model(*example_gpu)
-                    # import ipdb; ipdb.set_trace()
+                    span_starts, span_ends, mention_to_cluster_id, predicted_clusters = model(*example_gpu)
                     model.update_evaluator(
                         span_starts,
                         span_ends,
