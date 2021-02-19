@@ -464,6 +464,14 @@ class MentionModel(CorefModel):
         device = self.device
         conf = self.config
 
+        if sentence_len.shape[0] > conf['doc_max_segments']:
+            logger.warn('Not predicting document longer than doc_max_segments')
+            return [
+                torch.tensor([], device=device),
+                torch.tensor([], device=device),
+                torch.tensor(0.0, requires_grad=True),
+            ]
+
         if conf['model_type'] == 'electra':
             mention_doc = self.bert(input_ids, attention_mask=input_mask)[0]
         else:
@@ -474,21 +482,15 @@ class MentionModel(CorefModel):
         speaker_ids = speaker_ids[input_mask]
 
         num_words = mention_doc.shape[0]
-        candidates = self.get_candidate_spans(num_words, sentence_map, None, device=device)
-
-        # Get candidate labels
-        same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(candidates['candidate_starts'], 0))
-        same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidates['candidate_ends'], 0))
-        same_span = (same_start & same_end).to(torch.long)
-        candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
-        candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)  # [num candidates]; non-gold span has label 0
-        if len(candidates['candidate_starts']) > conf['mention_max_size']:
-            logger.warn('Not predicting document longer than mention_max_size')
-            return torch.zeros(len(candidates['candidate_starts']), device=self.device), candidate_labels, None
+        gold_info = {
+            "gold_starts": gold_starts,
+            "gold_ends": gold_ends,
+            "gold_mention_cluster_map": gold_mention_cluster_map
+        }
+        candidates = self.get_candidate_spans(num_words, sentence_map, gold_info, device=device)
 
         span_start_emb, span_end_emb = mention_doc[candidates['candidate_starts']], mention_doc[candidates['candidate_ends']]
         candidate_emb_list = [span_start_emb, span_end_emb]
-
 
         if conf['use_features']:
             candidate_width_idx = candidates['candidate_ends'] - candidates['candidate_starts']
@@ -508,5 +510,5 @@ class MentionModel(CorefModel):
         candidate_emb_list.append(head_attn_emb)
         candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
         scores = self.span_emb_score_ffnn(candidate_span_emb)
-        loss = self.loss(scores.squeeze(), candidate_labels.to(torch.float))
-        return scores, candidate_labels, loss
+        loss = self.loss(scores.squeeze(), candidates["candidate_labels"].to(torch.bool).to(torch.float))
+        return scores, candidates["candidate_labels"], loss
