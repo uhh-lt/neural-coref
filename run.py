@@ -7,6 +7,7 @@ from transformers import AdamW
 from torch.optim import Adam
 from tensorize import CorefDataProcessor
 import util
+import argparse
 import time
 from os.path import join
 from metrics import CorefEvaluator
@@ -283,11 +284,20 @@ class Runner:
         model.load_state_dict(torch.load(path_ckpt, map_location=torch.device('cpu')), strict=False)
         logger.info('Loaded model from %s' % path_ckpt)
 
+def build_parser():
+    parser = argparse.ArgumentParser(description='Train coreference models')
+    parser.add_argument("config", help='Config file to use e.g.: `experiments.conf`', type=str)
+    parser.add_argument("gpu", help='Which GPU to use', type=int)
+    parser.add_argument("model", help='Pre-trained model to use as basis', type=str, nargs="?", default=None)
+    return parser
 
 if __name__ == '__main__':
-    config_name, gpu_id = sys.argv[1], int(sys.argv[2])
-    runner = Runner(config_name, gpu_id)
+    parser = build_parser()
+    args = parser.parse_args()
+    runner = Runner(args.config, args.gpu)
     model = runner.initialize_model()
+    if args.model:
+        runner.load_model_checkpoint(model, args.model)
 
     runner.train(model)
 
