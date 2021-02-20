@@ -5,7 +5,7 @@ import sys
 def evaluate(config_name, gpu_id, saved_suffix, out_file):
     runner = Runner(config_name, gpu_id)
     model = runner.initialize_model(saved_suffix)
-    model.eval_only = True
+    #model.eval_only = True
 
     examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
     stored_info = runner.data.get_stored_info()

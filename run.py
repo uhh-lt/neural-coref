@@ -296,8 +296,8 @@ if __name__ == '__main__':
     examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
     stored_info = runner.data.get_stored_info()
 
-    path_dev_pred = join(self.config['log_dir'], f'dev_{self.last_save_suffix}.prediction')
-    path_test_pred = join(self.config['log_dir'], f'test_{self.last_save_suffix}.prediction')
+    path_dev_pred = join(runner.config['log_dir'], f'dev_{runner.last_save_suffix}.prediction')
+    path_test_pred = join(runner.config['log_dir'], f'test_{runner.last_save_suffix}.prediction')
     runner.evaluate(model, examples_dev, stored_info, 0, official=True, conll_path=runner.config['conll_eval_path'], out_file=path_dev_pred)  # Eval dev
-    model.eval_only = True
+    #model.eval_only = True
     runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=runner.config['conll_test_path'], out_file=path_test_pred)  # Eval test
