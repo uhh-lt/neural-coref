@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import BertModel, ElectraModel
 import util
 import logging
-from collections import Iterable
+from collections import Iterable, defaultdict
 import numpy as np
 import torch.nn.init as init
 import higher_order as ho
@@ -429,7 +429,7 @@ class CorefModel(nn.Module):
 class MentionModel(CorefModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.loss = torch.nn.BCEWithLogitsLoss()
+        self.loss = torch.nn.BCEWithLogitsLoss(torch.tensor(self.config["positive_class_weight"]))
 
     def get_candidate_spans(self, num_words, sentence_map, gold_info, device='cpu'):
         sentence_indices = sentence_map  # [num tokens]
@@ -466,6 +466,7 @@ class MentionModel(CorefModel):
             return [
                 torch.tensor([], device=device),
                 torch.tensor([], device=device),
+                {},
                 torch.tensor(0.0, requires_grad=True),
             ]
 
@@ -507,5 +508,17 @@ class MentionModel(CorefModel):
         candidate_emb_list.append(head_attn_emb)
         candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
         scores = self.span_emb_score_ffnn(candidate_span_emb)
-        loss = self.loss(scores.squeeze(), candidates["candidate_labels"].to(torch.bool).to(torch.float))
-        return scores, candidates["candidate_labels"], loss
+        loss = self.loss(scores.squeeze(), candidates["candidate_labels"].clone().to(torch.bool).to(torch.float))
+        cluster_to_spans = defaultdict(list)
+        new_cluster = 0
+        for label, score, start, end in zip(
+                candidates["candidate_labels"],
+                scores,
+                candidates["candidate_starts"],
+                candidates["candidate_ends"],
+        ):
+            if score > 0.5:
+                new_cluster += 1
+                cluster_to_spans[new_cluster].append((start.item(), end.item()))
+
+        return scores, candidates["candidate_labels"], cluster_to_spans, loss

@@ -1,4 +1,5 @@
 import logging
+import itertools
 import random
 import numpy as np
 import torch
@@ -27,6 +28,7 @@ logger = logging.getLogger()
 class MentionRunner(Runner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.last_saved_suffix = None
 
     def initialize_model(self, saved_suffix=None):
         model = MentionModel(self.config, self.device)
@@ -76,7 +78,7 @@ class MentionRunner(Runner):
             random.shuffle(examples_train)  # Shuffle training set
             for doc_key, example in examples_train:
                 example_gpu = [d.to(self.device) for d in example]
-                loss = model(*example_gpu)[2]
+                loss = model(*example_gpu)[3]
                 loss.backward()
                 loss_history.append(loss)
                 loss_during_report += loss
@@ -120,19 +122,28 @@ class MentionRunner(Runner):
         true_positives = 0
         false_positives = 0
         true_negatives = 0
+        false_negatives = 0
 
+        doc_to_prediction = {}
+
+        negative_examples = 0.0
+        positive_examples = 0.0
         for i, (doc_key, tensor_example) in enumerate(tensor_examples):
             example_gpu = [d.to(self.device) for d in tensor_example]
             with torch.no_grad():
-                scores, labels, loss = model(*example_gpu)
+                scores, labels, cluster_to_spans, loss = model(*example_gpu)
+                doc_to_prediction[doc_key] = cluster_to_spans.values()
                 total += len(labels)
                 predicted = (scores > 0.5).T.squeeze()
                 labels = labels.to(torch.bool)
+                positive_examples += sum(labels)
+                negative_examples += len(labels) - sum(labels)
                 true_positives += sum(predicted & labels)
                 false_positives += sum(predicted & torch.logical_not(labels))
                 true_negatives += sum(torch.logical_not(predicted) & torch.logical_not(labels))
+                false_negatives += sum(torch.logical_not(predicted) & labels)
         precision = true_positives / (true_positives + false_positives)
-        recall = true_negatives / (true_negatives + false_positives)
+        recall = true_positives / (true_positives + false_negatives)
         f1 = 2 * (precision * recall) / (precision + recall)
         metrics = {
             'precision': precision,
@@ -144,7 +155,29 @@ class MentionRunner(Runner):
             logger.info('%s: %.2f' % (name, score))
             if tb_writer:
                 tb_writer.add_scalar(name, score, step)
-        return f1, metrics
+        logger.info('Positive weight for this distribution: %.5f' % (negative_examples / positive_examples).item())
+
+        subtoken_map = stored_info['subtoken_maps']
+        duplicates_removed = {}
+        # remove duplicates
+        for doc_key, clusters in doc_to_prediction.items():
+            handled = set()
+            doc_no_duplicates = []
+            for cluster_id, mentions in enumerate(clusters):
+                new_mentions = []
+                for start, end in mentions:
+                    start_word, end_word = subtoken_map[doc_key][start], subtoken_map[doc_key][end]
+                    if (start_word, end_word) in handled:
+                        pass
+                    else:
+                        handled.add((start_word, end_word))
+                        new_mentions.append((start, end))
+                doc_no_duplicates.append(new_mentions)
+            duplicates_removed[doc_key] = doc_no_duplicates
+
+        if official:
+            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, duplicates_removed, stored_info['subtoken_maps'], "/tmp/ev_out")
+        return f1.item(), metrics
 
     def predict(self, model, tensor_examples):
         logger.info('Predicting %d samples...' % len(tensor_examples))
@@ -189,7 +222,9 @@ class MentionRunner(Runner):
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
 
     def save_model_checkpoint(self, model, step):
-        path_ckpt = join(self.config['log_dir'], f'model_{self.name_suffix}_{step}.bin')
+        suffix = f'model_{self.name_suffix}_{step}.bin'
+        self.last_saved_suffix = suffix
+        path_ckpt = join(self.config['log_dir'], suffix)
         torch.save(model.state_dict(), path_ckpt)
         logger.info('Saved model to %s' % path_ckpt)
 
@@ -205,3 +240,6 @@ if __name__ == '__main__':
     model = runner.initialize_model()
 
     runner.train(model)
+
+    # Restore best parameters
+    runner.load_model_checkpoint(model, runner.last_saved_suffix)
