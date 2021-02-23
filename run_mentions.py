@@ -109,7 +109,7 @@ class MentionRunner(Runner):
                         self.save_model_checkpoint(model, len(loss_history))
                     logger.info('Eval max f1: %.2f' % max_f1)
                     start_time = time.time()
-
+                pbar.update()
         # Wrap up
         tb_writer.close()
         return loss_history
