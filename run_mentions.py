@@ -114,7 +114,7 @@ class MentionRunner(Runner):
         tb_writer.close()
         return loss_history
 
-    def evaluate(self, model, tensor_examples, stored_info, step, official=False, conll_path=None, tb_writer=None):
+    def evaluate(self, model, tensor_examples, stored_info, step, official=False, conll_path=None, tb_writer=None, out_file=None):
         logger.info('Step %d: evaluating on %d samples...' % (step, len(tensor_examples)))
         model.to(self.device)
 
@@ -176,7 +176,9 @@ class MentionRunner(Runner):
             duplicates_removed[doc_key] = doc_no_duplicates
 
         if official:
-            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, duplicates_removed, stored_info['subtoken_maps'], "/tmp/ev_out")
+            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, duplicates_removed, stored_info['subtoken_maps'], out_file)
+            official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
+            logger.info('Official avg F1: %.4f' % official_f1)
         return f1.item(), metrics
 
     def predict(self, model, tensor_examples):
@@ -222,9 +224,9 @@ class MentionRunner(Runner):
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
 
     def save_model_checkpoint(self, model, step):
-        suffix = f'model_{self.name_suffix}_{step}.bin'
+        suffix = f'{self.name_suffix}_{step}'
         self.last_saved_suffix = suffix
-        path_ckpt = join(self.config['log_dir'], suffix)
+        path_ckpt = join(self.config['log_dir'], f"model_{self.last_saved_suffix}.bin")
         torch.save(model.state_dict(), path_ckpt)
         logger.info('Saved model to %s' % path_ckpt)
 
@@ -243,3 +245,11 @@ if __name__ == '__main__':
 
     # Restore best parameters
     runner.load_model_checkpoint(model, runner.last_saved_suffix)
+
+    stored_info = runner.data.get_stored_info()
+    examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
+
+    path_dev_pred = join(runner.config['log_dir'], f'dev_{runner.last_save_suffix}.prediction')
+    path_test_pred = join(runner.config['log_dir'], f'test_{runner.last_save_suffix}.prediction')
+    runner.evaluate(model, examples_dev, stored_info, 0, official=True, conll_path=runner.config['conll_eval_path'], out_file=path_dev_pred)
+    runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=runner.config['conll_test_path'], out_file=path_test_pred)
