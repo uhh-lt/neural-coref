@@ -16,6 +16,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from model import CorefModel
 import conll
 import sys
+import gc
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -279,16 +280,19 @@ class Runner:
         torch.save(model.state_dict(), path_ckpt)
         logger.info('Saved model to %s' % path_ckpt)
 
-    def load_model_checkpoint(self, model, suffix):
-        path_ckpt = join(self.config['log_dir'], f'model_{suffix}.bin')
+    def load_model_checkpoint(self, model, suffix, dir=None):
+        if dir is None:
+            dir = self.config['log_dir']
+        path_ckpt = join(dir, f'model_{suffix}.bin')
         model.load_state_dict(torch.load(path_ckpt, map_location=torch.device('cpu')), strict=False)
         logger.info('Loaded model from %s' % path_ckpt)
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Train coreference models')
-    parser.add_argument("config", help='Config file to use e.g.: `experiments.conf`', type=str)
-    parser.add_argument("gpu", help='Which GPU to use', type=int)
-    parser.add_argument("model", help='Pre-trained model to use as basis', type=str, nargs="?", default=None)
+    parser.add_argument('config', help='Config file to use e.g.: `experiments.conf`', type=str)
+    parser.add_argument('gpu', help='Which GPU to use', type=int)
+    parser.add_argument('--model', help='Pre-trained model to use as basis', type=str, nargs="?", default=None)
+    parser.add_argument('--mention-pre-training', help='Config to use for mention pre-trianing', type=str)
     return parser
 
 if __name__ == '__main__':
@@ -298,6 +302,14 @@ if __name__ == '__main__':
     model = runner.initialize_model()
     if args.model:
         runner.load_model_checkpoint(model, args.model)
+    if args.mention_pre_training:
+        from run_mentions import run_mentions
+        logger.info('Performing mention pre-training')
+        mention_model, mention_runner = run_mentions(args.mention_pre_training, args.gpu)
+        runner.load_model_checkpoint(model, mention_runner.last_saved_suffix, dir=mention_runner.config['log_dir'])
+        # We need the GPU RAM to be freed before doing things with the new model
+        del mention_model, mention_runner
+        gc.collect()
 
     runner.train(model)
 

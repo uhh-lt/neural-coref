@@ -28,7 +28,7 @@ logger = logging.getLogger()
 class MentionRunner(Runner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.last_saved_suffix = None
+        self.last_save_suffix = None
 
     def initialize_model(self, saved_suffix=None):
         model = MentionModel(self.config, self.device)
@@ -225,8 +225,8 @@ class MentionRunner(Runner):
 
     def save_model_checkpoint(self, model, step):
         suffix = f'{self.name_suffix}_{step}'
-        self.last_saved_suffix = suffix
-        path_ckpt = join(self.config['log_dir'], f"model_{self.last_saved_suffix}.bin")
+        self.last_save_suffix = suffix
+        path_ckpt = join(self.config['log_dir'], f"model_{self.last_save_suffix}.bin")
         torch.save(model.state_dict(), path_ckpt)
         logger.info('Saved model to %s' % path_ckpt)
 
@@ -236,15 +236,14 @@ class MentionRunner(Runner):
         logger.info('Loaded model from %s' % path_ckpt)
 
 
-if __name__ == '__main__':
-    config_name, gpu_id = sys.argv[1], int(sys.argv[2])
+def run_mentions(config_name, gpu_id):
     runner = MentionRunner(config_name, gpu_id)
     model = runner.initialize_model()
 
     runner.train(model)
 
     # Restore best parameters
-    runner.load_model_checkpoint(model, runner.last_saved_suffix)
+    runner.load_model_checkpoint(model, runner.last_save_suffix)
 
     stored_info = runner.data.get_stored_info()
     examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
@@ -253,3 +252,8 @@ if __name__ == '__main__':
     path_test_pred = join(runner.config['log_dir'], f'test_{runner.last_save_suffix}.prediction')
     runner.evaluate(model, examples_dev, stored_info, 0, official=True, conll_path=runner.config['conll_eval_path'], out_file=path_dev_pred)
     runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=runner.config['conll_test_path'], out_file=path_test_pred)
+    return model, runner
+
+if __name__ == '__main__':
+    config_name, gpu_id = sys.argv[1], int(sys.argv[2])
+    run_mentions(config_name, gpu_id)
