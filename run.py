@@ -306,7 +306,7 @@ if __name__ == '__main__':
         from run_mentions import run_mentions
         logger.info('Performing mention pre-training')
         mention_model, mention_runner = run_mentions(args.mention_pre_training, args.gpu)
-        runner.load_model_checkpoint(model, mention_runner.last_saved_suffix, dir=mention_runner.config['log_dir'])
+        runner.load_model_checkpoint(model, mention_runner.last_save_suffix, dir=mention_runner.config['log_dir'])
         # We need the GPU RAM to be freed before doing things with the new model
         del mention_model, mention_runner
         gc.collect()
