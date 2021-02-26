@@ -289,7 +289,7 @@ class Runner:
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Train coreference models')
-    parser.add_argument('config', help='Config file to use e.g.: `experiments.conf`', type=str)
+    parser.add_argument('config', help='Config name to use', type=str)
     parser.add_argument('gpu', help='Which GPU to use', type=int)
     parser.add_argument('--model', help='Pre-trained model to use as basis', type=str, nargs="?", default=None)
     parser.add_argument('--mention-pre-training', help='Config to use for mention pre-trianing', type=str)
