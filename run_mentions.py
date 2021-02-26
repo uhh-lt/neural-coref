@@ -6,6 +6,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AdamW
 from torch.optim import Adam
+import sklearn.metrics
 from tensorize import CorefDataProcessor
 import util
 import time
@@ -17,6 +18,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from model import MentionModel
 import conll
 import sys
+import csv
 from tqdm import tqdm
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
@@ -124,6 +126,9 @@ class MentionRunner(Runner):
         true_negatives = 0
         false_negatives = 0
 
+        scores_list = []
+        label_list = []
+
         doc_to_prediction = {}
 
         negative_examples = 0.0
@@ -142,6 +147,8 @@ class MentionRunner(Runner):
                 false_positives += sum(predicted & torch.logical_not(labels))
                 true_negatives += sum(torch.logical_not(predicted) & torch.logical_not(labels))
                 false_negatives += sum(torch.logical_not(predicted) & labels)
+                scores_list.append(scores.to("cpu"))
+                label_list.append(labels.to("cpu"))
         precision = true_positives / (true_positives + false_positives)
         recall = true_positives / (true_positives + false_negatives)
         f1 = 2 * (precision * recall) / (precision + recall)
@@ -151,6 +158,25 @@ class MentionRunner(Runner):
             'accuracy': (true_positives + true_negatives) / total, # This is pretty useless here due to the number of true negatives
             'f1': f1,
         }
+        if tb_writer:
+            tb_writer.add_pr_curve(
+                "mention_pr",
+                labels=torch.cat(label_list),
+                predictions=torch.cat(scores_list).T.squeeze(),
+                num_thresholds=1000,
+                global_step=step,
+            )
+            name = f'{self.name_suffix}_pr_{step}.csv'
+            out_file = open(self.config['log_dir'] + '/' + name, 'w')
+            writer = csv.writer(out_file)
+            writer.writerow(['precision', 'recall', 'threshold'])
+            curve = sklearn.metrics.precision_recall_curve(
+                torch.cat(label_list),
+                torch.cat(scores_list).T.squeeze(),
+            )
+            for (precision, recall, thresh) in zip(*curve):
+                writer.writerow([precision, recall, thresh])
+            out_file.close()
         for name, score in metrics.items():
             logger.info('%s: %.2f' % (name, score))
             if tb_writer:
