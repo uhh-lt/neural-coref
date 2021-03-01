@@ -9,9 +9,17 @@ class IncrementalEntities:
         self.emb = torch.tensor([]).to(device)
         self.count = torch.tensor([]).to(device)
         self.class_most_recent_entity = {}
-        self.mention_distance = None
-        self.sentence_distance = None
+        self.mention_distance = torch.tensor([]).to(device)
+        self.sentence_distance = torch.tensor([]).to(device)
         self.mention_to_cluster_id = {}
+
+    def _check_integrity(self):
+        size = self.emb.shape[0]
+        assert self.count.shape[0] == size
+        assert max(self.class_most_recent_entity.values()) < size
+        assert self.mention_distance.shape[0] == size
+        assert self.sentence_distance.shape[0] == size
+        assert max(self.mention_to_cluster_id.values()) < size
 
     def __len__(self):
         return len(self.emb)
@@ -132,13 +140,10 @@ class IncrementalEntities:
         """
         span_starts = []
         span_ends = []
-        max_cluster_id = 0
-        predicted_clusters_list = [[]] * (max(self.mention_to_cluster_id.values()) + 1)
+        predicted_clusters_list = [list() for _ in range((max(self.mention_to_cluster_id.values()) + 1))]
         for (start, end), cluster_id in self.mention_to_cluster_id.items():
             span_starts.append(start)
             span_ends.append(end)
             predicted_clusters_list[cluster_id].append((start, end))
-            if cluster_id >= max_cluster_id:
-                max_cluster_id = cluster_id
         assert len(predicted_clusters_list) == (max(self.mention_to_cluster_id.values()) + 1)
         return span_starts, span_ends, self.mention_to_cluster_id, predicted_clusters_list
