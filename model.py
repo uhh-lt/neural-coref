@@ -599,6 +599,7 @@ class MentionModel(CorefModel):
 class IncrementalCorefModel(CorefModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.loss = torch.nn.CrossEntropyLoss()
 
         # layers for incremental model
         # self.pair_score
@@ -723,7 +724,6 @@ class IncrementalCorefModel(CorefModel):
         top_span_emb = top_spans['emb']
 
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
-        class_most_recent_entity = {}
         if entities is None:
             entities = IncrementalEntities(conf, device)
 
@@ -771,12 +771,14 @@ class IncrementalCorefModel(CorefModel):
                 cluster_to_update = index_to_update - 1
 
                 if gold_class and do_loss:
-                    target = torch.tensor([class_most_recent_entity.get(gold_class, -1) + 1]).to(device)
-                    loss = -1 * torch.log_softmax(scores.squeeze().T, 0)[target]
+                    target = torch.tensor([entities.class_most_recent_entity.get(gold_class, -1) + 1]).to(device)
+                    loss = self.loss(scores.T, target)
                     losses.append(loss)
                 elif do_loss:
+                    # In this case we are training but don't have a gold label for this span
+                    # i.e. the span is not in any gold cluster!
                     # Always create a new singleton cluster hoping nothing else ever gets added
-                    loss = -1 * torch.log_softmax(scores.squeeze().T, 0)[0]
+                    loss = self.loss(scores.T, torch.tensor([0], device=device))
                     losses.append(loss)
                 if util.cuda_allocated_memory() > conf['memory_limit'] and len(losses) > 0:
                     sum(losses).backward(retain_graph=True)
