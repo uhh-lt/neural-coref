@@ -1,4 +1,5 @@
 import torch
+from collections import Counter
 
 
 class IncrementalEntities:
@@ -134,16 +135,29 @@ class IncrementalEntities:
         self.mention_distance[cluster_to_update] = 0
         self.mention_distance += 1
 
-    def get_result(self):
+    def get_result(self, remove_singletons=True):
         """
         Returns 4-tuple (span_starts, span_ends, mention_to_cluster_id, predicted_clusters) representing the entities in the cluster.
         """
         span_starts = []
         span_ends = []
-        predicted_clusters_list = [list() for _ in range((max(self.mention_to_cluster_id.values()) + 1))]
-        for (start, end), cluster_id in self.mention_to_cluster_id.items():
+        if remove_singletons:
+            counter = Counter(self.mention_to_cluster_id.values())
+            non_singletons = set(value for value, count in counter.items() if count > 1)
+            cluster_mapping = {v:k for k,v in enumerate(non_singletons)}
+            mention_to_cluster_id = {k: cluster_mapping[v] for k, v in self.mention_to_cluster_id.items() if v in non_singletons}
+        else:
+            mention_to_cluster_id = self.mention_to_cluster_id
+        if len(mention_to_cluster_id) == 0:
+            predicted_clusters_list = []
+        else:
+            predicted_clusters_list = [list() for _ in range((max(mention_to_cluster_id.values()) + 1))]
+        for (start, end), cluster_id in mention_to_cluster_id.items():
             span_starts.append(start)
             span_ends.append(end)
             predicted_clusters_list[cluster_id].append((start, end))
-        assert len(predicted_clusters_list) == (max(self.mention_to_cluster_id.values()) + 1)
-        return span_starts, span_ends, self.mention_to_cluster_id, predicted_clusters_list
+        if len(mention_to_cluster_id) != 0:
+            assert len(predicted_clusters_list) == (max(mention_to_cluster_id.values()) + 1)
+        for c in predicted_clusters_list:
+            print(c)
+        return span_starts, span_ends, mention_to_cluster_id, predicted_clusters_list

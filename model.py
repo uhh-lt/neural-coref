@@ -635,6 +635,7 @@ class IncrementalCorefModel(CorefModel):
             assert gold_ends is not None
             do_loss = True
 
+        offset = 0
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
             end = start + max_segments
             if gold_starts is not None:
@@ -651,21 +652,24 @@ class IncrementalCorefModel(CorefModel):
                     end_offset = start_offset + (segment_size * max_segments)
                     if start_offset <= gold_end and end_offset > gold_end:
                         windowed_gold_ends.append(gold_end % (segment_size * max_segments))
+            sentence_map_start = torch.sum(input_mask[:start], (0, 1))
+            sentence_map_end = sentence_map_start + torch.sum(input_mask[start:end], (0, 1))
             res = self.get_predictions_incremental_internal(
                 input_ids[start:end],
                 input_mask[start:end],
                 speaker_ids[start:end],
                 sentence_len[start:end],
                 genre,
-                sentence_map[i * segment_size: i + max_segments * segment_size],
+                sentence_map[sentence_map_start:sentence_map_end],
                 is_training,
                 gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
                 gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
                 gold_mention_cluster_map=gold_mention_cluster_map,
                 entities=entities,
                 do_loss=do_loss,
-                offset=(i * segment_size)
+                offset=offset
             )
+            offset += torch.sum(input_mask[start:end], (0, 1)).item()
             if do_loss:
                 entities, loss = res
             else:
@@ -677,7 +681,6 @@ class IncrementalCorefModel(CorefModel):
             mention_to_cluster_id,
             predicted_clusters,
         ]
-        assert len(predicted_clusters) == (max(mention_to_cluster_id.values()) + 1)
         if do_loss:
             return out, loss
         else:

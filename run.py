@@ -301,7 +301,7 @@ class Runner:
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
 
     def save_model_checkpoint(self, model, step):
-        if step < 10000:
+        if step < 10000 and not self.config['incremental']:
             logger.info('Skipping model saving, we are very early in training!')
             return  # Debug
         self.last_save_suffix = f'{self.name}_{self.name_suffix}_{step}'
