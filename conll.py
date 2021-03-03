@@ -59,7 +59,7 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
                 for cluster_id in end_map[word_index]:
                     coref_list.append("{})".format(cluster_id))
             if word_index in word_map:
-                for cluster_id in word_map[word_index]:
+                for cluster_id in set(word_map[word_index]):
                     coref_list.append("({})".format(cluster_id))
             if word_index in start_map:
                 for cluster_id in start_map[word_index]:
