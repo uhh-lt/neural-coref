@@ -601,11 +601,6 @@ class IncrementalCorefModel(CorefModel):
         super().__init__(*args, **kwargs)
         self.loss = torch.nn.CrossEntropyLoss()
 
-        # layers for incremental model
-        # self.pair_score
-        # pair_score(torch.concact(seg_distance_emb, entity, mention))
-        # self.config['feature_emb_size']
-
         # Takes concat(entity_representation, span_representation)
         self.entity_representation_gate = nn.Linear(self.span_emb_size * 2, 1)
         # self.create_entity = torch.nn.Embedding(1, self.config['feature_emb_size'])

@@ -158,6 +158,4 @@ class IncrementalEntities:
             predicted_clusters_list[cluster_id].append((start, end))
         if len(mention_to_cluster_id) != 0:
             assert len(predicted_clusters_list) == (max(mention_to_cluster_id.values()) + 1)
-        for c in predicted_clusters_list:
-            print(c)
         return span_starts, span_ends, mention_to_cluster_id, predicted_clusters_list
