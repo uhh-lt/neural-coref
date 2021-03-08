@@ -47,8 +47,9 @@ class CorefModel(nn.Module):
         if config['use_segment_distance']:
             self.pair_emb_size += config['feature_emb_size']
 
-        self.emb_span_width = self.make_embedding(self.max_span_width) if config['use_features'] else None
-        self.emb_span_width_prior = self.make_embedding(self.max_span_width) if config['use_width_prior'] else None
+        assert config["span_width_embedding_size"] >= self.max_span_width
+        self.emb_span_width = self.make_embedding(config["span_width_embedding_size"]) if config['use_features'] else None
+        self.emb_span_width_prior = self.make_embedding(config["span_width_embedding_size"]) if config['use_width_prior'] else None
         self.emb_antecedent_distance_prior = self.make_embedding(10) if config['use_distance_prior'] else None
         self.emb_genre = self.make_embedding(self.num_genres)
         self.emb_same_speaker = self.make_embedding(2) if config['use_metadata'] else None
