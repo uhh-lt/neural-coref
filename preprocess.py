@@ -274,6 +274,7 @@ if __name__ == '__main__':
     #                     help='Do lower case on input')
     parser.add_argument('--input_suffix', type=str, default='v4_gold_conll')
     parser.add_argument('--input_format', type=str, default='conll-2012',
+                        choices=["conll-2012", "semeval-2010"],
                         help='Input format conll-2012 (default) or semeval-2010')
 
     args = parser.parse_args()
