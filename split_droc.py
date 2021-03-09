@@ -100,7 +100,7 @@ BOOKS = [
 ]
 
 
-def convert_library(in_path, output_file_name, typesystem_path=None):
+def convert_library(in_path, output_file_name, typesystem_path=None, split_paragraphs=False):
     if typesystem_path is None:
         typesystem_path = "CorefTypeSystem.xml"
     with open(typesystem_path, "rb") as f:
@@ -112,6 +112,7 @@ def convert_library(in_path, output_file_name, typesystem_path=None):
         typesystem.create_type("de.uniwue.mk.kall.SprechaktText")
         dialogue = typesystem.create_type("de.uniwue.mk.kall.Dialog")
         typesystem.add_feature(type_=dialogue, name="Sprechakte", rangeTypeName="uima.cas.Integer")
+        TrainingDoc = typesystem.create_type("de.uhh.inf.lt.TrainingDocument")
     file_names = []
     for file_name in BOOKS:
         file_names.append(os.path.join(in_path, file_name))
@@ -133,65 +134,103 @@ def convert_library(in_path, output_file_name, typesystem_path=None):
         in_file = open(filename, "rb")
         doc_id = filename.split("/")[-1].split(".")[0].replace(" ", "_") + f".{doc_num:05d}"
         cas = cassis.load_cas_from_xmi(in_file, typesystem=typesystem)
-        output_file.write(f"#begin document {doc_id}\n")
-        active_entities = set()
-        for sentence_number, sentence in enumerate(cas.select("de.uniwue.kalimachos.coref.type.Sentence"), 1):
-            tokens = cas.select_covered("de.uniwue.kalimachos.coref.type.POS", sentence)
-            for word_num, token in enumerate(tokens, 1):
-                lemma = token.Lemma
-                coref = "-"
-                pos = "-"
-                word = token.get_covered_text()
-                entities = list(cas.select_covering("de.uniwue.kalimachos.coref.type.NamedEntity", token))
-                starting_entities = set()
-                closing_entities = set()
-                for e in entities:
-                    if e.begin <= token.begin and e not in active_entities:
-                        starting_entities.add(e)
-                        active_entities.add(e)
-                for e in active_entities:
-                    if e.end <= token.end:
-                        closing_entities.add(e)
-                coref = []
-                for single_token_entity in set(e.ID for e in starting_entities & closing_entities):
-                    coref.append(f"({single_token_entity})")
-                for starting_entity in set(e.ID for e in starting_entities - closing_entities):
-                    coref.append(f"({starting_entity}")
-                for ending_entity in set(e.ID for e in closing_entities - starting_entities):
-                    coref.append(f"{ending_entity})")
-                row = [
-                    doc_id,
-                    str(sentence_number),
-                    str(word_num),
-                    word,
-                    pos,
-                    "-",
-                    lemma or "-",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    "|".join(coref) if len(coref) > 0 else "-",
-                ]
-                output_file.write(
-                    "\t".join(row) + "\n"
-                )
-                active_entities -= closing_entities
-            output_file.write("\n")
-        output_file.write("\n#end document\n")
-        if len(active_entities) != 0:
-            raise Exception(f"Open entities at the end of document {doc_id}: {active_entities}")
+        if split_paragraphs:
+            write_paragraphs_as_docs(cas, output_file, doc_id, TrainingDoc)
+        else:
+            write_document(cas, output_file, doc_id)
+
+def write_paragraphs_as_docs(cas, output_file, doc_id, TrainingDoc):
+    paragraph_num = 1
+    previous_end = 0
+    for paragraph in cas.select("de.uniwue.kalimachos.coref.type.Paragraph"):
+        # This is effectively a minimum length
+        if paragraph.end - previous_end < (384 * 3):
+            continue
+        else:
+            custom_paragraph = TrainingDoc()
+            custom_paragraph.begin = previous_end
+            custom_paragraph.end = paragraph.end
+            previous_end = paragraph.end
+        if len(cas.select_covered("de.uniwue.kalimachos.coref.type.Sentence", custom_paragraph)) > 0:
+            write_document(
+                cas,
+                output_file,
+                doc_id + f"_{paragraph_num:03d}",
+                paragraph=paragraph,
+            )
+            paragraph_num += 1
+
+
+def write_document(cas, output_file, doc_id, paragraph=None):
+    if not paragraph:
+        sentences = list(cas.select("de.uniwue.kalimachos.coref.type.Sentence"))
+    else:
+        sentences = list(cas.select_covered("de.uniwue.kalimachos.coref.type.Sentence", paragraph))
+    if len(sentences) == 0:
+        return
+    output_file.write(f"#begin document {doc_id}\n")
+    active_entities = set()
+    for sentence_number, sentence in enumerate(sentences, 1):
+        tokens = cas.select_covered("de.uniwue.kalimachos.coref.type.POS", sentence)
+        for word_num, token in enumerate(tokens, 1):
+            lemma = token.Lemma
+            coref = "-"
+            pos = "-"
+            word = token.get_covered_text()
+            entities = list(cas.select_covering("de.uniwue.kalimachos.coref.type.NamedEntity", token))
+            starting_entities = set()
+            closing_entities = set()
+            for e in entities:
+                if e.begin <= token.begin and e not in active_entities:
+                    starting_entities.add(e)
+                    active_entities.add(e)
+            for e in active_entities:
+                if e.end <= token.end:
+                    closing_entities.add(e)
+            coref = []
+            for single_token_entity in set(e.ID for e in starting_entities & closing_entities):
+                coref.append(f"({single_token_entity})")
+            for starting_entity in set(e.ID for e in starting_entities - closing_entities):
+                coref.append(f"({starting_entity}")
+            for ending_entity in set(e.ID for e in closing_entities - starting_entities):
+                coref.append(f"{ending_entity})")
+            row = [
+                doc_id,
+                str(sentence_number),
+                str(word_num),
+                word,
+                pos,
+                "-",
+                lemma or "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "|".join(coref) if len(coref) > 0 else "-",
+            ]
+            output_file.write(
+                "\t".join(row) + "\n"
+            )
+            active_entities -= closing_entities
+        output_file.write("\n")
+    output_file.write("\n#end document\n")
+    if len(active_entities) != 0:
+        raise Exception(f"Open entities at the end of document {doc_id}: {active_entities}")
 
 def main():
     parser = argparse.ArgumentParser("Convert DROC files to ConLL-2012 format.")
     parser.add_argument("xmi_path", type=str)
     parser.add_argument("output_conll_prefix", type=str)
     parser.add_argument("--type-system-xml", help="Path to typesystem XML file", default=None, type=str)
+    parser.add_argument("--split-paragraphs", help="Split paragraphs into individual documents.", action="store_true")
     args = parser.parse_args()
 
-    convert_library(args.xmi_path, args.output_conll_prefix, args.type_system_xml)
+    if args.split_paragraphs:
+        print("Splitting documents into paragraphs!")
+
+    convert_library(args.xmi_path, args.output_conll_prefix, args.type_system_xml, args.split_paragraphs)
 
 if __name__ == "__main__":
     main()
