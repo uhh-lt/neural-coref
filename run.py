@@ -250,8 +250,16 @@ class Runner:
         optimizers = [
             AdamW(grouped_bert_param, lr=self.config['bert_learning_rate'], eps=self.config['adam_eps']),
             Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0),
-            Adam(model.get_params()[2], lr=self.config.get('incremental_learning_rate', 0), eps=self.config['adam_eps'], weight_decay=0),
         ]
+        if self.config['incremental']:
+            optimizers.append(
+                Adam(
+                    model.get_params()[2],
+                    lr=self.config.get('incremental_learning_rate', 0),
+                    eps=self.config['adam_eps'],
+                    weight_decay=0
+                )
+            )
         return optimizers
         # grouped_parameters = [
         #     {
@@ -295,8 +303,11 @@ class Runner:
         schedulers = [
             LambdaLR(optimizers[0], lr_lambda_bert),
             LambdaLR(optimizers[1], lr_lambda_task),
-            LambdaLR(optimizers[2], lr_lambda_incremental),
         ]
+        if self.config['incremental']:
+            schedulers.append(
+                LambdaLR(optimizers[2], lr_lambda_incremental),
+            )
         return schedulers
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
 
