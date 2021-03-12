@@ -629,6 +629,7 @@ class IncrementalCorefModel(CorefModel):
         mention_to_cluster_id = {}
         predicted_clusters = []
         entities = None
+        cpu_entities = IncrementalEntities(conf=self.config, device="cpu")
 
         do_loss = False
         if gold_mention_cluster_map is not None:
@@ -637,6 +638,7 @@ class IncrementalCorefModel(CorefModel):
             do_loss = True
 
         offset = 0
+        total_loss = torch.tensor([0.0], requires_grad=True, device=self.device)
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
             end = start + max_segments
             if gold_starts is not None:
@@ -672,10 +674,13 @@ class IncrementalCorefModel(CorefModel):
             )
             offset += torch.sum(input_mask[start:end], (0, 1)).item()
             if do_loss:
-                entities, loss = res
+                entities, new_cpu_entities, loss = res
+                total_loss = loss + total_loss
             else:
-                entities = res
-        starts, ends, mention_to_cluster_id, predicted_clusters = entities.get_result()
+                entities, new_cpu_entities  = res
+            cpu_entities.extend(new_cpu_entities)
+        cpu_entities.extend(entities)
+        starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result()
         out = [
             starts,
             ends,
@@ -724,6 +729,7 @@ class IncrementalCorefModel(CorefModel):
         top_span_emb = top_spans['emb']
 
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
+        cpu_entities = IncrementalEntities(conf, "cpu")
         if entities is None:
             entities = IncrementalEntities(conf, device)
 
@@ -739,7 +745,7 @@ class IncrementalCorefModel(CorefModel):
                 entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
             else:
                 if conf['evict']:
-                    entities.evict()
+                    entities.evict(evict_to=cpu_entities)
                 feature_list = []
                 if conf['use_metadata']:
                     same_speaker_emb = torch.zeros(conf['feature_emb_size'], device=self.device)
@@ -800,6 +806,6 @@ class IncrementalCorefModel(CorefModel):
             sum(losses).backward(retain_graph=True)
             cpu_loss += sum(losses).item()
         if do_loss:
-            return entities, cpu_loss
+            return entities, cpu_entities, cpu_loss
         else:
-            return entities
+            return entities, cpu_entities

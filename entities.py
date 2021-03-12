@@ -25,7 +25,7 @@ class IncrementalEntities:
     def __len__(self):
         return len(self.emb)
 
-    def evict(self):
+    def evict(self, evict_to=None):
         """
         Evicts entities that are older than the specified thresholds.
         """
@@ -34,8 +34,18 @@ class IncrementalEntities:
             distance = distance.item()
             if (
                 distance > self.conf["unconditional_eviction_limit"]
-                or (distance > self.conf["singleton_eviction_limit"] and self.count[i] == 1)
+                or (distance > self.conf["singleton_eviction_limit"] and self.count[i - offset] == 1)
             ) and len(self) > 1:
+                if evict_to:
+                    evict_to._add_entity(
+                        self.emb[i - offset].to(evict_to.device),
+                        None,  # We don't retain this as the evicted copy is not used for loss computation
+                        [span for span, entity in self.mention_to_cluster_id.items() if entity == (i - offset)],
+                        0,
+                        count=self.count[i - offset].to(evict_to.device),
+                        sentence_distance=self.sentence_distance[i - offset].to(evict_to.device),
+                        mention_distance=self.mention_distance[i - offset].to(evict_to.device),
+                    )
                 self.emb = torch.cat(
                     [self.emb[: i - offset], self.emb[i + 1 - offset :]], 0
                 ).to(self.device)
@@ -80,32 +90,47 @@ class IncrementalEntities:
                 self.mention_to_cluster_id = new_cluster_ids
                 offset += 1
 
-    def add_entity(self, emb, gold_class, span_start, span_end, offset):
-        span_start += offset
-        span_end += offset
+    def _add_entity(self, emb, gold_class, spans, offset, sentence_distance=None,
+                    count=None, mention_distance=None):
+        if sentence_distance is None:
+            sentence_distance = torch.zeros(1).unsqueeze(0).to(self.device)
+        if count is None:
+            count = torch.ones(1).unsqueeze(0).type(torch.long).to(self.device)
+        if mention_distance is None:
+            mention_distance = torch.ones(1).to(self.device).unsqueeze(0)
         if len(self) == 0:
             self.emb = emb.unsqueeze(0).to(self.device)
-            self.count = torch.ones(1).to(self.device)
-            self.class_most_recent_entity[gold_class] = 0
-            self.sentence_distance = torch.zeros(1).unsqueeze(0).to(self.device)
+            self.count = count
+            if gold_class is not None:
+                self.class_most_recent_entity[gold_class] = 0
+            self.sentence_distance = sentence_distance
             self.mention_distance = (
-                torch.zeros(1).unsqueeze(0).type(torch.long).to(self.device)
+                mention_distance
             )
-            self.mention_to_cluster_id[(span_start.item(), span_end.item())] = 0
+            for (span_start, span_end) in spans:
+                span_start += offset
+                span_end += offset
+                self.mention_to_cluster_id[(span_start, span_end)] = 0
         else:
             self.emb = torch.cat([self.emb, emb.unsqueeze(0)])
-            self.count = torch.cat([self.count, torch.ones(1, device=self.device)])
+            self.count = torch.cat([self.count, count])
             self.sentence_distance = torch.cat(
-                [self.sentence_distance, torch.zeros(1).unsqueeze(0).to(self.device)]
+                [self.sentence_distance, sentence_distance]
             )
             self.mention_distance = torch.cat(
-                [self.mention_distance, torch.zeros(1).unsqueeze(0).to(self.device)]
+                [self.mention_distance, mention_distance]
             )
-            if gold_class:
+            if gold_class is not None:
                 self.class_most_recent_entity[gold_class] = self.emb.shape[0] - 1
-            self.mention_to_cluster_id[(span_start.item(), span_end.item())] = (
-                self.emb.shape[0] - 1
-            )
+            for (span_start, span_end) in spans:
+                span_start += offset
+                span_end += offset
+                self.mention_to_cluster_id[(span_start, span_end)] = (
+                    self.emb.shape[0] - 1
+                )
+
+    def add_entity(self, emb, gold_class, span_start, span_end, offset):
+        self._add_entity(emb, gold_class, [(span_start.item(), span_end.item())], offset)
         self.mention_distance += 1
 
     def update_entity(
@@ -134,6 +159,25 @@ class IncrementalEntities:
         self.count[cluster_to_update] += 1
         self.mention_distance[cluster_to_update] = 0
         self.mention_distance += 1
+
+    def extend(self, other):
+        """
+        Extend entity collection with existing one.
+
+        In the process the information required for loss computation is lost.
+        """
+        for i in range(len(other.emb)):
+            # TODO: this can be optimized by building a dictionary outside the for loop
+            cluster_ids = [span for span, entity in other.mention_to_cluster_id.items() if entity == i]
+            self._add_entity(
+                other.emb[i].to(self.device),
+                None,
+                cluster_ids,
+                0,
+                count=other.count[i].to(self.device),
+                sentence_distance=other.sentence_distance[i].to(self.device),
+                mention_distance=other.mention_distance[i].to(self.device),
+            )
 
     def get_result(self, remove_singletons=True):
         """
