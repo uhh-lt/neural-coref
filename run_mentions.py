@@ -153,6 +153,8 @@ class MentionRunner(Runner):
                 false_negatives += torch.sum(torch.logical_not(predicted) & labels).item()
                 scores_list.append(scores.cpu())
                 label_list.append(labels.cpu())
+                if len(labels) < len(recall_values_acc):
+                    continue
                 candidate_idx_sorted_by_score = torch.argsort(scores.squeeze(), descending=True)
                 labels_sorted_by_score = labels[candidate_idx_sorted_by_score]
                 cumulative = torch.cumsum(labels_sorted_by_score, dim=0)
