@@ -13,10 +13,11 @@ from os.path import join
 from metrics import CorefEvaluator
 from datetime import datetime
 from torch.optim.lr_scheduler import LambdaLR
-from model import CorefModel
+from model import CorefModel, IncrementalCorefModel
 import conll
 import sys
 import gc
+from tqdm import tqdm
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -50,7 +51,10 @@ class Runner:
         self.data = CorefDataProcessor(self.config)
 
     def initialize_model(self, saved_suffix=None):
-        model = CorefModel(self.config, self.device)
+        if self.config['incremental']:
+            model = IncrementalCorefModel(self.config, self.device)
+        else:
+            model = CorefModel(self.config, self.device)
         if saved_suffix:
             self.load_model_checkpoint(model, saved_suffix)
         return model
@@ -80,7 +84,7 @@ class Runner:
         schedulers = self.get_scheduler(optimizers, total_update_steps)
 
         # Get model parameters for grad clipping
-        bert_param, task_param = model.get_params()
+        bert_param, task_param, incremental_param = model.get_params()
 
         # Start training
         logger.info('*******************Training*******************')
@@ -95,6 +99,7 @@ class Runner:
         max_f1 = 0
         start_time = time.time()
         model.zero_grad()
+        pbar = tqdm(total=len(examples_train) * epochs)
         for epo in range(epochs):
             random.shuffle(examples_train)  # Shuffle training set
             for doc_key, example in examples_train:
@@ -106,11 +111,16 @@ class Runner:
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
                     loss /= grad_accum
-                loss.backward()
+                if not conf["incremental"]:
+                    loss.backward()
                 if conf['max_grad_norm']:
                     torch.nn.utils.clip_grad_norm_(bert_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(task_param, conf['max_grad_norm'])
-                loss_during_accum.append(loss.item())
+                    torch.nn.utils.clip_grad_norm_(incremental_param, conf['max_grad_norm'])
+                if not conf["incremental"]:
+                    loss_during_accum.append(loss.item())
+                else:
+                    loss_during_accum.append(loss)
 
                 # Update
                 if len(loss_during_accum) % grad_accum == 0:
@@ -148,6 +158,7 @@ class Runner:
                             self.save_model_checkpoint(model, len(loss_history))
                         logger.info('Eval max f1: %.2f' % max_f1)
                         start_time = time.time()
+                pbar.update()
 
         logger.info('**********Finished training**********')
         logger.info('Actual update steps: %d' % len(loss_history))
@@ -163,16 +174,29 @@ class Runner:
         doc_to_prediction = {}
 
         model.eval()
-        for i, (doc_key, tensor_example) in enumerate(tensor_examples):
+        for i, (doc_key, tensor_example) in tqdm(enumerate(tensor_examples), total=len(tensor_examples)):
             gold_clusters = stored_info['gold'][doc_key]
             tensor_example = tensor_example[:7]  # Strip out gold
             example_gpu = [d.to(self.device) for d in tensor_example]
-            with torch.no_grad():
-                _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)
-            span_starts, span_ends = span_starts.tolist(), span_ends.tolist()
-            antecedent_idx, antecedent_scores = antecedent_idx.tolist(), antecedent_scores.tolist()
-            predicted_clusters = model.update_evaluator(span_starts, span_ends, antecedent_idx, antecedent_scores, gold_clusters, evaluator)
-            doc_to_prediction[doc_key] = predicted_clusters
+            if self.config["incremental"]:
+                with torch.no_grad():
+                    span_starts, span_ends, mention_to_cluster_id, predicted_clusters = model(*example_gpu)
+                    model.update_evaluator(
+                        span_starts,
+                        span_ends,
+                        predicted_clusters,
+                        mention_to_cluster_id,
+                        gold_clusters,
+                        evaluator,
+                    )
+                    doc_to_prediction[doc_key] = predicted_clusters
+            else:
+                with torch.no_grad():
+                    _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)
+                span_starts, span_ends = span_starts.tolist(), span_ends.tolist()
+                antecedent_idx, antecedent_scores = antecedent_idx.tolist(), antecedent_scores.tolist()
+                predicted_clusters = model.update_evaluator(span_starts, span_ends, antecedent_idx, antecedent_scores, gold_clusters, evaluator)
+                doc_to_prediction[doc_key] = predicted_clusters
 
         p, r, f = evaluator.get_prf()
         metrics = {'Eval_Avg_Precision': p * 100, 'Eval_Avg_Recall': r * 100, 'Eval_Avg_F1': f * 100}
@@ -211,7 +235,7 @@ class Runner:
 
     def get_optimizer(self, model):
         no_decay = ['bias', 'LayerNorm.weight']
-        bert_param, task_param = model.get_params(named=True)
+        bert_param, task_param, incremental_params = model.get_params(named=True)
         grouped_bert_param = [
             {
                 'params': [p for n, p in bert_param if not any(nd in n for nd in no_decay)],
@@ -225,8 +249,17 @@ class Runner:
         ]
         optimizers = [
             AdamW(grouped_bert_param, lr=self.config['bert_learning_rate'], eps=self.config['adam_eps']),
-            Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0)
+            Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0),
         ]
+        if self.config['incremental']:
+            optimizers.append(
+                Adam(
+                    model.get_params()[2],
+                    lr=self.config.get('incremental_learning_rate', 0),
+                    eps=self.config['adam_eps'],
+                    weight_decay=0
+                )
+            )
         return optimizers
         # grouped_parameters = [
         #     {
@@ -264,15 +297,22 @@ class Runner:
         def lr_lambda_task(current_step):
             return max(0.0, float(total_update_steps - current_step) / float(max(1, total_update_steps)))
 
+        def lr_lambda_incremental(current_step):
+            return max(0.0, float(total_update_steps - current_step) / float(max(1, total_update_steps)))
+
         schedulers = [
             LambdaLR(optimizers[0], lr_lambda_bert),
-            LambdaLR(optimizers[1], lr_lambda_task)
+            LambdaLR(optimizers[1], lr_lambda_task),
         ]
+        if self.config['incremental']:
+            schedulers.append(
+                LambdaLR(optimizers[2], lr_lambda_incremental),
+            )
         return schedulers
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
 
     def save_model_checkpoint(self, model, step):
-        if step < 10000:
+        if step < 10000 and not self.config['incremental']:
             logger.info('Skipping model saving, we are very early in training!')
             return  # Debug
         self.last_save_suffix = f'{self.name}_{self.name_suffix}_{step}'
