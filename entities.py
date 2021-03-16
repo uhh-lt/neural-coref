@@ -36,7 +36,7 @@ class IncrementalEntities:
                 distance > self.conf["unconditional_eviction_limit"]
                 or (distance > self.conf["singleton_eviction_limit"] and self.count[i - offset] == 1)
             ) and len(self) > 1:
-                if evict_to:
+                if evict_to is not None:
                     evict_to._add_entity(
                         self.emb[i - offset].to(evict_to.device),
                         None,  # We don't retain this as the evicted copy is not used for loss computation
@@ -94,10 +94,16 @@ class IncrementalEntities:
                     count=None, mention_distance=None):
         if sentence_distance is None:
             sentence_distance = torch.zeros(1).unsqueeze(0).to(self.device)
+        else:
+            sentence_distance = sentence_distance.unsqueeze(0)
         if count is None:
             count = torch.ones(1).unsqueeze(0).type(torch.long).to(self.device)
+        else:
+            count = count.unsqueeze(0)
         if mention_distance is None:
             mention_distance = torch.ones(1).to(self.device).unsqueeze(0)
+        else:
+            mention_distance = mention_distance.unsqueeze(0)
         if len(self) == 0:
             self.emb = emb.unsqueeze(0).to(self.device)
             self.count = count
