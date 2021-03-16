@@ -133,6 +133,9 @@ class MentionRunner(Runner):
 
         negative_examples = 0.0
         positive_examples = 0.0
+        recall_values_acc = torch.zeros(101, device=self.device)
+        recall_actual_acc = 0
+
         for i, (doc_key, tensor_example) in enumerate(tensor_examples):
             example_gpu = [d.to(self.device) for d in tensor_example]
             with torch.no_grad():
@@ -141,22 +144,39 @@ class MentionRunner(Runner):
                 total += len(labels)
                 predicted = (scores > 0.5).T.squeeze()
                 labels = labels.to(torch.bool)
-                positive_examples += sum(labels)
-                negative_examples += len(labels) - sum(labels)
-                true_positives += sum(predicted & labels)
-                false_positives += sum(predicted & torch.logical_not(labels))
-                true_negatives += sum(torch.logical_not(predicted) & torch.logical_not(labels))
-                false_negatives += sum(torch.logical_not(predicted) & labels)
-                scores_list.append(scores.to("cpu"))
-                label_list.append(labels.to("cpu"))
-        precision = true_positives / (true_positives + false_positives)
-        recall = true_positives / (true_positives + false_negatives)
-        f1 = 2 * (precision * recall) / (precision + recall)
+                num_gold_mentions = labels.sum().item()
+                positive_examples += num_gold_mentions
+                negative_examples += len(labels) - num_gold_mentions
+                true_positives += torch.sum(predicted & labels).item()
+                false_positives += torch.sum(predicted & torch.logical_not(labels)).item()
+                true_negatives += torch.sum(torch.logical_not(predicted) & torch.logical_not(labels)).item()
+                false_negatives += torch.sum(torch.logical_not(predicted) & labels).item()
+                scores_list.append(scores.cpu())
+                label_list.append(labels.cpu())
+                candidate_idx_sorted_by_score = torch.argsort(scores.squeeze(), descending=True)
+                labels_sorted_by_score = labels[candidate_idx_sorted_by_score]
+                cumulative = torch.cumsum(labels_sorted_by_score, dim=0)
+                cutoff = int(min(self.config['top_span_ratio'] * len(labels), self.config['max_num_extracted_spans']))
+                recall_actual_acc += cumulative[cutoff].item()
+                step_idx = torch.arange(0.0, 1.01, 0.01, device=cumulative.device) * cumulative.shape[0]
+                step_idx[-1] -= 1
+                recall_values = cumulative[step_idx.to(torch.long)]
+                recall_values[torch.isnan(recall_values)] = 0.0
+                recall_values_acc += recall_values
+
+        precision = true_positives / (true_positives + false_positives) if true_positives > 0 else 0
+        recall = true_positives / (true_positives + false_negatives) if true_positives > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if precision + recall > 0 else 0
+        recall_values_acc /= positive_examples
+        recall_values_acc = recall_values_acc.cpu()
+        logger.info(recall_values_acc.tolist())
+        logger.info(total / len(tensor_examples))
         metrics = {
             'precision': precision,
             'recall': recall,
             'accuracy': (true_positives + true_negatives) / total, # This is pretty useless here due to the number of true negatives
             'f1': f1,
+            'recalls': recall_actual_acc / positive_examples
         }
         if tb_writer:
             tb_writer.add_pr_curve(
@@ -166,6 +186,7 @@ class MentionRunner(Runner):
                 num_thresholds=1000,
                 global_step=step,
             )
+            tb_writer.add_histogram('relative recall', recall_values_acc, i, bins=len(recall_values_acc))
             name = f'{self.name_suffix}_pr_{step}.csv'
             out_file = open(self.config['log_dir'] + '/' + name, 'w')
             writer = csv.writer(out_file)
@@ -181,7 +202,7 @@ class MentionRunner(Runner):
             logger.info('%s: %.2f' % (name, score))
             if tb_writer:
                 tb_writer.add_scalar(name, score, step)
-        logger.info('Positive weight for this distribution: %.5f' % (negative_examples / positive_examples).item())
+        logger.info('Positive weight for this distribution: %.5f' % (negative_examples / positive_examples))
 
         subtoken_map = stored_info['subtoken_maps']
         duplicates_removed = {}
@@ -205,7 +226,7 @@ class MentionRunner(Runner):
             conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, duplicates_removed, stored_info['subtoken_maps'], out_file)
             official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
             logger.info('Official avg F1: %.4f' % official_f1)
-        return f1.item(), metrics
+        return f1, metrics
 
     def predict(self, model, tensor_examples):
         logger.info('Predicting %d samples...' % len(tensor_examples))
