@@ -187,7 +187,14 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer, input_format)
     document_state = DocumentState(doc_key)
     word_idx = -1
 
-    word_col = 3 if input_format == 'conll-2012' else 1
+    if input_format == 'conll-2012':
+        word_col = 3
+    elif input_format == 'semeval-2010':
+        word_col = 1
+    elif input_format == 'token_only':
+        word_col = 0
+    else:
+        raise Exception(f"Invalid input format '{input_format}'")
 
     # Build up documents
     for line in doc_lines:
@@ -195,7 +202,8 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer, input_format)
         if len(row) == 0:
             document_state.sentence_end[-1] = True
         else:
-            assert len(row) >= 12
+            if input_format != 'token_only':
+                assert len(row) >= 12
             word_idx += 1
             word = normalize_word(row[word_col], language)
             subtokens = tokenizer.tokenize(word)
@@ -203,7 +211,10 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer, input_format)
             document_state.token_end += [False] * (len(subtokens) - 1) + [True]
             for idx, subtoken in enumerate(subtokens):
                 document_state.subtokens.append(subtoken)
-                info = None if idx != 0 else (row + [len(subtokens)])
+                if idx != 0 or input_format == 'token_only':
+                    info = None
+                else:
+                    info = (row + [len(subtokens)])
                 document_state.info.append(info)
                 document_state.sentence_end.append(False)
                 document_state.subtoken_map.append(word_idx)
