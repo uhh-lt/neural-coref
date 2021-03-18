@@ -508,31 +508,6 @@ class MentionModel(CorefModel):
         super().__init__(*args, **kwargs)
         self.loss = torch.nn.BCEWithLogitsLoss(torch.tensor(self.config["positive_class_weight"]))
 
-    def get_candidate_spans(self, num_words, sentence_map, gold_info, device='cpu'):
-        sentence_indices = sentence_map  # [num tokens]
-        candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
-        candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
-        candidate_start_sent_idx = sentence_indices[candidate_starts]
-        candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
-        candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
-        candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
-        num_candidates = candidate_starts.shape[0]
-
-        candidate_labels = None
-        if gold_info is not None:
-            same_start = (torch.unsqueeze(gold_info['gold_starts'], 1) == torch.unsqueeze(candidate_starts, 0))
-            same_end = (torch.unsqueeze(gold_info['gold_ends'], 1) == torch.unsqueeze(candidate_ends, 0))
-            same_span = (same_start & same_end).to(torch.long)
-            candidate_labels = torch.matmul(torch.unsqueeze(gold_info['gold_mention_cluster_map'], 0).to(torch.float), same_span.to(torch.float))
-            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)  # [num candidates]; non-gold span has label 0
-        return {
-            'candidate_starts': candidate_starts,
-            'candidate_ends': candidate_ends,
-            'num_candidates': num_candidates,
-            'candidate_labels': candidate_labels,
-        }
-
-
     def forward(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                 is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
         device = self.device
