@@ -74,7 +74,7 @@ def predict_token_list(token_list):
 if __name__ == '__main__':
     parser = build_parser()
     args = parser.parse_args()
-    runner = Runner(args.config, args.gpu)
+    runner = Runner(args.config, args.gpu, skip_data_loading=True)
     model = runner.initialize_model().to(runner.device)
     model.eval()
     tensorizer = Tensorizer(runner.config)

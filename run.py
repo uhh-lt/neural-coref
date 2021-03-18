@@ -26,7 +26,7 @@ logger = logging.getLogger()
 
 
 class Runner:
-    def __init__(self, config_name, gpu_id=0, seed=None):
+    def __init__(self, config_name, gpu_id=0, seed=None, skip_data_loading=False):
         self.name = config_name
         self.name_suffix = datetime.now().strftime('%b%d_%H-%M-%S')
         self.gpu_id = gpu_id
@@ -48,7 +48,8 @@ class Runner:
         self.device = torch.device('cpu' if gpu_id is None else f'cuda:{gpu_id}')
 
         # Set up data
-        self.data = CorefDataProcessor(self.config)
+        if not skip_data_loading:
+            self.data = CorefDataProcessor(self.config)
 
     def initialize_model(self, saved_suffix=None):
         if self.config['incremental']:
