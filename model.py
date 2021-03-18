@@ -8,6 +8,8 @@ import numpy as np
 import torch.nn.init as init
 import higher_order as ho
 from entities import IncrementalEntities
+from torch import Tensor
+from collections import OrderedDict
 
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
@@ -70,6 +72,30 @@ class CorefModel(nn.Module):
 
         self.update_steps = 0  # Internal use for debug
         self.debug = True
+
+    def load_state_dict(self, state_dict: 'OrderedDict[str, Tensor]',
+                        strict: bool = True):
+        new_shape = (self.config['num_antecedent_distance_buckets'], self.config['feature_emb_size'])
+        if state_dict['emb_antecedent_distance_prior.weight'].shape != new_shape:
+            logger.warn('Saved embedding for distance is of different size, some values are initialized randomly.')
+            for weight_name in ['emb_antecedent_distance_prior.weight', 'emb_top_antecedent_distance.weight']:
+                state_dict[weight_name] = self.initialize_larger_embedding_layer(
+                    state_dict[weight_name],
+                    new_shape[0],
+                )
+        return super().load_state_dict(state_dict, strict=strict)
+
+    def initialize_larger_embedding_layer(self, old_tensor, new_input_size, std=0.02):
+        old_shape = old_tensor.shape
+        new_weight = torch.empty(
+            (new_input_size, self.config["feature_emb_size"]),
+            dtype=old_tensor.dtype
+        )
+        init.normal_(new_weight, std=std)
+        new_weight[
+            :old_shape[0], :self.config["feature_emb_size"]
+        ] = old_tensor
+        return new_weight
 
     def make_embedding(self, dict_size, std=0.02):
         emb = nn.Embedding(dict_size, self.config['feature_emb_size'])
