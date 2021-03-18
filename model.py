@@ -54,7 +54,7 @@ class CorefModel(nn.Module):
         self.emb_genre = self.make_embedding(self.num_genres)
         self.emb_same_speaker = self.make_embedding(2) if config['use_metadata'] else None
         self.emb_segment_distance = self.make_embedding(config['max_training_sentences']) if config['use_segment_distance'] else None
-        self.emb_top_antecedent_distance = self.make_embedding(10)
+        self.emb_top_antecedent_distance = self.make_embedding(config['num_antecedent_distance_buckets'])
         self.emb_cluster_size = self.make_embedding(10) if config['fine_grained'] and config['higher_order'] == 'cluster_merging' else None
 
         self.mention_token_attn = self.make_ffnn(self.bert_emb_size, 0, output_size=1) if config['model_heads'] else None
@@ -270,7 +270,7 @@ class CorefModel(nn.Module):
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
             distance_score = torch.squeeze(self.antecedent_distance_score_ffnn(self.dropout(self.emb_antecedent_distance_prior.weight)), 1)
-            bucketed_distance = util.bucket_distance(antecedent_offsets)
+            bucketed_distance = util.bucket_distance(antecedent_offsets, num_buckets=self.config['num_antecedent_distance_buckets'])
             antecedent_distance_score = distance_score[bucketed_distance]
             pairwise_fast_scores += antecedent_distance_score
         top_pairwise_fast_scores, top_antecedent_idx = torch.topk(pairwise_fast_scores, k=max_top_antecedents)
@@ -297,7 +297,7 @@ class CorefModel(nn.Module):
                 top_antecedent_seg_distance = torch.clamp(top_antecedent_seg_distance, 0, self.config['max_training_sentences'] - 1)
                 seg_distance_emb = self.emb_segment_distance(top_antecedent_seg_distance)
             if conf['use_features']:  # Antecedent distance
-                top_antecedent_distance = util.bucket_distance(top_antecedent_offsets)
+                top_antecedent_distance = util.bucket_distance(top_antecedent_offsets, num_buckets=self.config['num_antecedent_distance_buckets'])
                 top_antecedent_distance_emb = self.emb_top_antecedent_distance(top_antecedent_distance)
 
             for depth in range(conf['coref_depth']):
@@ -731,7 +731,7 @@ class IncrementalCorefModel(CorefModel):
                     seg_distance_emb = self.emb_segment_distance(entities.sentence_distance.type(torch.long))
                     feature_list.append(seg_distance_emb.reshape(-1, conf['feature_emb_size']))
                 if conf['use_features']:
-                    dists = util.bucket_distance(entities.mention_distance)
+                    dists = util.bucket_distance(entities.mention_distance, num_buckets=self.config['num_antecedent_distance_buckets'])
                     antecedent_distance_emb = self.emb_top_antecedent_distance(dists.type(torch.long))
                     feature_list.append(antecedent_distance_emb.reshape(-1, conf['feature_emb_size']))
                 fast_source_span_emb = self.dropout(self.coarse_bilinear(emb))

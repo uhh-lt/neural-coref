@@ -40,13 +40,13 @@ def set_seed(seed, set_gpu=True):
     logger.info('Random seed is set to %d' % seed)
 
 
-def bucket_distance(offsets):
+def bucket_distance(offsets, num_buckets=10):
     """ offsets: [num spans1, num spans2] """
     # 10 semi-logscale bin: 0, 1, 2, 3, 4, (5-7)->5, (8-15)->6, (16-31)->7, (32-63)->8, (64+)->9
     logspace_distance = torch.log2(offsets.to(torch.float)).to(torch.long) + 3
     identity_mask = (offsets <= 4).to(torch.long)
     combined_distance = identity_mask * offsets + (1 - identity_mask) * logspace_distance
-    combined_distance = torch.clamp(combined_distance, 0, 9)
+    combined_distance = torch.clamp(combined_distance, 0, num_buckets - 1)
     return combined_distance
 
 
