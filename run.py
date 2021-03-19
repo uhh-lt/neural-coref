@@ -125,6 +125,10 @@ class Runner:
 
                 # Update
                 if len(loss_during_accum) % grad_accum == 0:
+                    if conf['freeze_mention_score']:
+                        # Simply clear gradients
+                        model.span_emb_score_ffnn.zero_grad()
+                        model.span_width_score_ffnn.zero_grad()
                     for optimizer in optimizers:
                         optimizer.step()
                     model.zero_grad()
