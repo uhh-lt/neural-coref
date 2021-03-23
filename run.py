@@ -107,7 +107,13 @@ class Runner:
                 # Forward pass
                 model.train()
                 example_gpu = [d.to(self.device) for d in example]
-                _, loss = model(*example_gpu)
+                if not conf['incremental']:
+                    _, loss = model(*example_gpu)
+                else:
+                    min_loss_chance = conf['incremental_start_global_loss_ratio']
+                    loss_delta = conf['incremental_end_global_loss_ratio'] - min_loss_chance
+                    global_loss_chance = loss_delta * (len(loss_history) / total_update_steps) + min_loss_chance
+                    _, loss = model(*example_gpu, global_loss_chance=global_loss_chance)
 
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
@@ -118,7 +124,7 @@ class Runner:
                     torch.nn.utils.clip_grad_norm_(bert_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(task_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(incremental_param, conf['max_grad_norm'])
-                if not conf["incremental"]:
+                if not conf['incremental']:
                     loss_during_accum.append(loss.item())
                 else:
                     loss_during_accum.append(loss)

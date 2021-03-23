@@ -1,23 +1,38 @@
 import torch
 from collections import Counter
 
+import enum
+
+
+class GoldLabelStrategy(enum.Enum):
+    """
+    Describes the strategy used to, for training purposes, assign gold labels to each cluster.
+
+    MOST_RECENT: gold class of the most recently added mention, may bias towards locally correct decisions
+    ORIGINAL: gold class of the first mention in the cluster, encourages global consistency
+    """
+    MOST_RECENT = "most_recent"
+    ORIGINAL = "original"
+
 
 class IncrementalEntities:
-    def __init__(self, conf, device):
+    def __init__(self, conf, device, gold_strategy=GoldLabelStrategy.MOST_RECENT):
         self.conf = conf
         self.device = device
 
         self.emb = torch.tensor([]).to(device)
         self.count = torch.tensor([]).to(device)
-        self.class_most_recent_entity = {}
+        # From class to correct entity
+        self.class_gold_entity = {} # [class: gold_entity]
         self.mention_distance = torch.tensor([]).to(device)
         self.sentence_distance = torch.tensor([]).to(device)
         self.mention_to_cluster_id = {}
+        self.gold_strategy = gold_strategy
 
     def _check_integrity(self):
         size = self.emb.shape[0]
         assert self.count.shape[0] == size
-        assert max(self.class_most_recent_entity.values()) < size
+        assert max(self.class_gold_entity.values()) < size
         assert self.mention_distance.shape[0] == size
         assert self.sentence_distance.shape[0] == size
         assert max(self.mention_to_cluster_id.values()) < size
@@ -71,14 +86,14 @@ class IncrementalEntities:
                     0,
                 ).to(self.device)
                 new_classes = {}
-                for class_, entity_index in self.class_most_recent_entity.items():
+                for class_, entity_index in self.class_gold_entity.items():
                     if entity_index == i - offset:
                         pass
                     elif entity_index > i - offset:
                         new_classes[class_] = entity_index - 1
                     else:
                         new_classes[class_] = entity_index
-                self.class_most_recent_entity = new_classes
+                self.class_gold_entity = new_classes
                 new_cluster_ids = {}
                 for span, cluster in self.mention_to_cluster_id.items():
                     if cluster == i - offset:
@@ -108,7 +123,7 @@ class IncrementalEntities:
             self.emb = emb.unsqueeze(0).to(self.device)
             self.count = count
             if gold_class is not None:
-                self.class_most_recent_entity[gold_class] = 0
+                self.class_gold_entity[gold_class] = 0
             self.sentence_distance = sentence_distance
             self.mention_distance = (
                 mention_distance
@@ -127,7 +142,9 @@ class IncrementalEntities:
                 [self.mention_distance, mention_distance]
             )
             if gold_class is not None:
-                self.class_most_recent_entity[gold_class] = self.emb.shape[0] - 1
+                entity_gold_class = self.class_gold_entity.get(gold_class)
+                if self.gold_strategy != GoldLabelStrategy.ORIGINAL or entity_gold_class is None:
+                    self.class_gold_entity[gold_class] = self.emb.shape[0] - 1
             for (span_start, span_end) in spans:
                 span_start += offset
                 span_end += offset
@@ -152,7 +169,8 @@ class IncrementalEntities:
         span_start += offset
         span_end += offset
         if gold_class is not None:
-            self.class_most_recent_entity[gold_class] = cluster_to_update.item()
+            if self.gold_strategy == GoldLabelStrategy.MOST_RECENT:
+                self.class_gold_entity[gold_class] = cluster_to_update.item()
         self.mention_to_cluster_id[
             (span_start.item(), span_end.item())
         ] = cluster_to_update.item()
