@@ -100,7 +100,7 @@ BOOKS = [
 ]
 
 
-def convert_library(in_path, output_file_name, typesystem_path=None, split_paragraphs=False):
+def convert_library(in_path, output_file_name, typesystem_path=None, split_paragraphs=False, max_length=None):
     if typesystem_path is None:
         typesystem_path = "CorefTypeSystem.xml"
     with open(typesystem_path, "rb") as f:
@@ -137,7 +137,7 @@ def convert_library(in_path, output_file_name, typesystem_path=None, split_parag
         if split_paragraphs:
             write_paragraphs_as_docs(cas, output_file, doc_id, TrainingDoc)
         else:
-            write_document(cas, output_file, doc_id)
+            write_document(cas, output_file, doc_id, max_length=max_length)
 
 def write_paragraphs_as_docs(cas, output_file, doc_id, TrainingDoc):
     paragraph_num = 1
@@ -161,7 +161,7 @@ def write_paragraphs_as_docs(cas, output_file, doc_id, TrainingDoc):
             paragraph_num += 1
 
 
-def write_document(cas, output_file, doc_id, paragraph=None):
+def write_document(cas, output_file, doc_id, paragraph=None, max_length=None):
     if not paragraph:
         sentences = list(cas.select("de.uniwue.kalimachos.coref.type.Sentence"))
     else:
@@ -170,8 +170,10 @@ def write_document(cas, output_file, doc_id, paragraph=None):
         return
     output_file.write(f"#begin document {doc_id}\n")
     active_entities = set()
+    words = 0
     for sentence_number, sentence in enumerate(sentences, 1):
         tokens = cas.select_covered("de.uniwue.kalimachos.coref.type.POS", sentence)
+        sentence_rows = []
         for word_num, token in enumerate(tokens, 1):
             lemma = token.Lemma
             coref = "-"
@@ -210,10 +212,15 @@ def write_document(cas, output_file, doc_id, paragraph=None):
                 "-",
                 "|".join(coref) if len(coref) > 0 else "-",
             ]
+            sentence_rows.append(row)
+            active_entities -= closing_entities
+            words += 1
+        if words >= max_length:
+            break
+        for row in sentence_rows:
             output_file.write(
                 "\t".join(row) + "\n"
             )
-            active_entities -= closing_entities
         output_file.write("\n")
     output_file.write("\n#end document\n")
     if len(active_entities) != 0:
@@ -225,12 +232,17 @@ def main():
     parser.add_argument("output_conll_prefix", type=str)
     parser.add_argument("--type-system-xml", help="Path to typesystem XML file", default=None, type=str)
     parser.add_argument("--split-paragraphs", help="Split paragraphs into individual documents.", action="store_true")
+    parser.add_argument("--max-length", help="Cut off all documents after a certain number of tokens (always using the previous sentence boundary)", type=int, default=None)
     args = parser.parse_args()
+
+    if args.max_length and args.split_paragraphs:
+        print("--max-length and --split-paragraphs are mutually exclusive")
+        sys.exit(1)
 
     if args.split_paragraphs:
         print("Splitting documents into paragraphs!")
 
-    convert_library(args.xmi_path, args.output_conll_prefix, args.type_system_xml, args.split_paragraphs)
+    convert_library(args.xmi_path, args.output_conll_prefix, args.type_system_xml, args.split_paragraphs, max_length=args.max_length)
 
 if __name__ == "__main__":
     main()
