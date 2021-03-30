@@ -615,7 +615,7 @@ class IncrementalCorefModel(CorefModel):
 
     def get_predictions_incremental(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                     is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
-                                    global_loss_chance=0.0):
+                                    global_loss_chance=0.0, teacher_forcing=False):
         max_segments = 5
         segment_size = input_ids.shape[-1]
 
@@ -669,6 +669,7 @@ class IncrementalCorefModel(CorefModel):
                 do_loss=do_loss,
                 offset=offset,
                 loss_strategy=loss_strategy,
+                teacher_forcing=teacher_forcing,
             )
             offset += torch.sum(input_mask[start:end], (0, 1)).item()
             if do_loss:
@@ -692,7 +693,8 @@ class IncrementalCorefModel(CorefModel):
 
     def get_predictions_incremental_internal(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                              is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
-                                             entities=None, do_loss=None, offset=0, loss_strategy=GoldLabelStrategy.MOST_RECENT):
+                                             entities=None, do_loss=None, offset=0, loss_strategy=GoldLabelStrategy.MOST_RECENT,
+                                             teacher_forcing=False):
         device = self.device
         conf = self.config
 
@@ -785,6 +787,14 @@ class IncrementalCorefModel(CorefModel):
                     sum(losses).backward(retain_graph=True)
                     cpu_loss += sum(losses).item()
                     losses = []
+                if teacher_forcing:
+                    forced_class = entities.class_gold_entity.get(gold_class)
+                    if forced_class is None:
+                        cluster_to_update = None
+                    else:
+                        cluster_to_update = torch.tensor(forced_class)
+                    if cluster_to_update is None:
+                        index_to_update = 0
                 if index_to_update == 0:
                     entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
                 else:
@@ -795,7 +805,15 @@ class IncrementalCorefModel(CorefModel):
                                 entities.emb[cluster_to_update],
                             ],
                         )))
-                    entities.update_entity(cluster_to_update, emb, gold_class, span_start, span_end, update_gate, offset=offset)
+                    entities.update_entity(
+                        cluster_to_update,
+                        emb,
+                        gold_class,
+                        span_start,
+                        span_end,
+                        update_gate,
+                        offset=offset
+                    )
 
         if len(losses) > 0:
             sum(losses).backward(retain_graph=True)

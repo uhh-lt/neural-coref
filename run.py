@@ -113,7 +113,11 @@ class Runner:
                     min_loss_chance = conf['incremental_start_global_loss_ratio']
                     loss_delta = conf['incremental_end_global_loss_ratio'] - min_loss_chance
                     global_loss_chance = loss_delta * (len(loss_history) / total_update_steps) + min_loss_chance
-                    _, loss = model(*example_gpu, global_loss_chance=global_loss_chance)
+                    _, loss = model(
+                        *example_gpu,
+                        global_loss_chance=global_loss_chance,
+                        teacher_forcing=conf["incremental_teacher_forcing"],
+                    )
 
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
