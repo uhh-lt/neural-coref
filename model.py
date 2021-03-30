@@ -781,7 +781,7 @@ class IncrementalCorefModel(CorefModel):
                     # Always create a new singleton cluster hoping nothing else ever gets added
                     loss = self.loss(scores.T, torch.tensor([0], device=device))
                     losses.append(loss)
-                if util.cuda_allocated_memory() > conf['memory_limit'] and len(losses) > 0:
+                if util.cuda_allocated_memory(self.device) > conf['memory_limit'] and len(losses) > 0:
                     sum(losses).backward(retain_graph=True)
                     cpu_loss += sum(losses).item()
                     losses = []
