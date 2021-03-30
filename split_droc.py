@@ -168,9 +168,11 @@ def write_document(cas, output_file, doc_id, paragraph=None, max_length=None):
         sentences = list(cas.select_covered("de.uniwue.kalimachos.coref.type.Sentence", paragraph))
     if len(sentences) == 0:
         return
-    output_file.write(f"#begin document {doc_id}\n")
+    if max_length is None:
+        output_file.write(f"#begin document {doc_id}\n")
     active_entities = set()
     words = 0
+    sub_doc = 0
     for sentence_number, sentence in enumerate(sentences, 1):
         tokens = cas.select_covered("de.uniwue.kalimachos.coref.type.POS", sentence)
         sentence_rows = []
@@ -215,14 +217,25 @@ def write_document(cas, output_file, doc_id, paragraph=None, max_length=None):
             sentence_rows.append(row)
             active_entities -= closing_entities
             words += 1
-        if words >= max_length:
-            break
-        for row in sentence_rows:
-            output_file.write(
-                "\t".join(row) + "\n"
-            )
-        output_file.write("\n")
-    output_file.write("\n#end document\n")
+        if max_length:
+            if words == len(sentence_rows): # We are in the first iteration
+                output_file.write("#begin document\n")
+            if words >= max_length:
+                output_file.write("#end document\n\n")
+                sub_doc += 1
+                output_file.write("#begin document\n")
+                words = len(sentence_rows)
+            for row in sentence_rows:
+                row[0] += f"_{sub_doc:03d}"
+                output_file.write(
+                    "\t".join(row) + "\n"
+                )
+        if max_length is None:
+            for row in sentence_rows:
+                output_file.write(
+                    "\t".join(row) + "\n"
+                )
+    output_file.write("#end document\n\n")
     if len(active_entities) != 0:
         raise Exception(f"Open entities at the end of document {doc_id}: {active_entities}")
 
@@ -232,7 +245,7 @@ def main():
     parser.add_argument("output_conll_prefix", type=str)
     parser.add_argument("--type-system-xml", help="Path to typesystem XML file", default=None, type=str)
     parser.add_argument("--split-paragraphs", help="Split paragraphs into individual documents.", action="store_true")
-    parser.add_argument("--max-length", help="Cut off all documents after a certain number of tokens (always using the previous sentence boundary)", type=int, default=None)
+    parser.add_argument("--max-length", help="Split into documents of maximum length (always using the previous sentence boundary)", type=int, default=None)
     args = parser.parse_args()
 
     if args.max_length and args.split_paragraphs:
