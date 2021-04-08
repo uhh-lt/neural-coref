@@ -37,6 +37,7 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
         prediction_map[doc_key] = (start_map, end_map, word_map)
 
     word_index = 0
+    active_count = collections.Counter()
     for line in input_file.readlines():
         row = line.split()
         if len(row) == 0:
@@ -57,13 +58,18 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
             coref_list = []
             if word_index in end_map:
                 for cluster_id in end_map[word_index]:
-                    coref_list.append("{})".format(cluster_id))
+                    active_count[cluster_id] -= 1
+                    if active_count[cluster_id] == 0:
+                        coref_list.append("{})".format(cluster_id))
             if word_index in word_map:
-                for cluster_id in set(word_map[word_index]):
-                    coref_list.append("({})".format(cluster_id))
+                for cluster_id in set(word_map[word_index]) - set(start_map[word_index]) - set(end_map[word_index]):
+                    if active_count[cluster_id] == 0:
+                        coref_list.append("({})".format(cluster_id))
             if word_index in start_map:
                 for cluster_id in start_map[word_index]:
-                    coref_list.append("({}".format(cluster_id))
+                    active_count[cluster_id] += 1
+                    if active_count[cluster_id] == 1:
+                        coref_list.append("({}".format(cluster_id))
 
             if len(coref_list) == 0:
                 row[-1] = "-"
