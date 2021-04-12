@@ -679,7 +679,9 @@ class IncrementalCorefModel(CorefModel):
                 entities, new_cpu_entities  = res
             cpu_entities.extend(new_cpu_entities)
         cpu_entities.extend(entities)
-        starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result()
+        starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result(
+            remove_singletons=not self.config['incremental_singletons']
+        )
         out = [
             starts,
             ends,
@@ -697,6 +699,7 @@ class IncrementalCorefModel(CorefModel):
                                              teacher_forcing=False):
         device = self.device
         conf = self.config
+        return_singletons = conf['incremental_singletons']
 
         # The model should already be trained so we detach the BERT part, massively improving performance
         mention_doc = self.bert(input_ids, attention_mask=input_mask)[0].detach()  # [num seg, num max tokens, emb size]
@@ -767,21 +770,33 @@ class IncrementalCorefModel(CorefModel):
                 # It's important for us to also involve the mention span scores, the only way to prune discovered spans is by turning them into singleton clusters
                 # This is encouraged by explicitly involving the sum of the mention scores
                 original_scores = self.coref_score_ffnn(pair_emb) + fast_coref_scores
-                scores = torch.cat([new_cluster_threshold, original_scores])
+                if return_singletons:
+                    scores = torch.cat([new_cluster_threshold, -mention_score.view(1, 1), original_scores])
+                else:
+                    scores = torch.cat([new_cluster_threshold, original_scores])
                 dist = torch.softmax(scores, 0)
 
                 index_to_update = dist.argmax()
-                cluster_to_update = index_to_update - 1
-
+                if return_singletons:
+                    cluster_to_update = index_to_update - 2
+                else:
+                    cluster_to_update = index_to_update - 1
                 if gold_class and do_loss:
-                    target = torch.tensor([entities.class_gold_entity.get(gold_class, -1) + 1]).to(device)
+                    if return_singletons:
+                        target = torch.tensor([entities.class_gold_entity.get(gold_class, -2) + 2]).to(device)
+                    else:
+                        target = torch.tensor([entities.class_gold_entity.get(gold_class, -1) + 1]).to(device)
                     loss = self.loss(scores.T, target)
                     losses.append(loss)
                 elif do_loss:
                     # In this case we are training but don't have a gold label for this span
                     # i.e. the span is not in any gold cluster!
-                    # Always create a new singleton cluster hoping nothing else ever gets added
-                    loss = self.loss(scores.T, torch.tensor([0], device=device))
+                    if return_singletons:
+                        # In this case we add the option to discard a mention
+                        loss = self.loss(scores.T, torch.tensor([1], device=device))
+                    else:
+                        # Always create a new singleton cluster hoping nothing else ever gets added
+                        loss = self.loss(scores.T, torch.tensor([0], device=device))
                     losses.append(loss)
                 if util.cuda_allocated_memory(self.device) > conf['memory_limit'] and len(losses) > 0:
                     sum(losses).backward(retain_graph=True)
@@ -797,6 +812,8 @@ class IncrementalCorefModel(CorefModel):
                         index_to_update = 0
                 if index_to_update == 0:
                     entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
+                elif index_to_update == 1 and return_singletons:
+                    pass
                 else:
                     update_gate = torch.sigmoid(
                         self.entity_representation_gate(torch.cat(
