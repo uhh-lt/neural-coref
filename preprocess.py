@@ -102,8 +102,12 @@ class DocumentState(object):
                                 self.coref_stacks[cluster_id].append(first_subtoken_idx)
                         else:
                             cluster_id = int(part[:-1])
-                            start = self.coref_stacks[cluster_id].pop()
-                            self.clusters[cluster_id].append((start, last_subtoken_idx))
+                            try:
+                                start = self.coref_stacks[cluster_id].pop()
+                                self.clusters[cluster_id].append((start, last_subtoken_idx))
+                            except IndexError:
+                                # Since our splitting approach does not take into account entities this can, very occasionally happen.
+                                logger.warning("Trying to close non-existent entity (this should only happen very rarely).")
 
         # Merge clusters if any clusters have common mentions
         merged_clusters = []
