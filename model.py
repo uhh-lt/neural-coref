@@ -80,6 +80,13 @@ class CorefModel(nn.Module):
                     state_dict[weight_name],
                     new_shape[0],
                 )
+        new_shape = (self.config['max_training_sentences'], self.config['feature_emb_size'])
+        if state_dict['emb_segment_distance.weight'].shape != new_shape:
+            logger.warn('Saved embedding for segment distance is of different size, some values are initialized randomly.')
+            state_dict['emb_segment_distance.weight'] = self.initialize_larger_embedding_layer(
+                state_dict['emb_segment_distance.weight'],
+                new_shape[0],
+            )
         return super().load_state_dict(state_dict, strict=strict)
 
     def initialize_larger_embedding_layer(self, old_tensor, new_input_size, std=0.02):
