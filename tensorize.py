@@ -179,7 +179,7 @@ class Tensorizer:
                 out = []
                 for sentence_offset in range(0, len(sentences), self.config['max_training_sentences']):
                     out.append((
-                        f'doc_key_{sentence_offset}',
+                        f'{doc_key}_{sentence_offset}',
                         self.truncate_example(*example_tensor, sentence_offset=sentence_offset)
                     ))
                 return out
