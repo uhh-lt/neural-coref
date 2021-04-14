@@ -76,20 +76,20 @@ class CorefModel(nn.Module):
         if state_dict['emb_antecedent_distance_prior.weight'].shape != new_shape:
             logger.warn('Saved embedding for distance is of different size, some values are initialized randomly.')
             for weight_name in ['emb_antecedent_distance_prior.weight', 'emb_top_antecedent_distance.weight']:
-                state_dict[weight_name] = self.initialize_larger_embedding_layer(
+                state_dict[weight_name] = self.initialize_differently_sized_embedding_layer(
                     state_dict[weight_name],
                     new_shape[0],
                 )
         new_shape = (self.config['max_training_sentences'], self.config['feature_emb_size'])
         if state_dict['emb_segment_distance.weight'].shape != new_shape:
             logger.warn('Saved embedding for segment distance is of different size, some values are initialized randomly.')
-            state_dict['emb_segment_distance.weight'] = self.initialize_larger_embedding_layer(
+            state_dict['emb_segment_distance.weight'] = self.initialize_differently_sized_embedding_layer(
                 state_dict['emb_segment_distance.weight'],
                 new_shape[0],
             )
         return super().load_state_dict(state_dict, strict=strict)
 
-    def initialize_larger_embedding_layer(self, old_tensor, new_input_size, std=0.02):
+    def initialize_differently_sized_embedding_layer(self, old_tensor, new_input_size, std=0.02):
         old_shape = old_tensor.shape
         new_weight = torch.empty(
             (new_input_size, self.config["feature_emb_size"]),
@@ -97,8 +97,8 @@ class CorefModel(nn.Module):
         )
         init.normal_(new_weight, std=std)
         new_weight[
-            :old_shape[0], :self.config["feature_emb_size"]
-        ] = old_tensor
+            :min(old_shape[0], new_weight.shape[0]), :min(self.config["feature_emb_size"], new_weight.shape[1])
+        ] = old_tensor[:new_weight.shape[0], :new_weight.shape[1]]
         return new_weight
 
     def make_embedding(self, dict_size, std=0.02):
