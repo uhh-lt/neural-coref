@@ -648,6 +648,7 @@ class IncrementalCorefModel(CorefModel):
         offset = 0
         total_loss = torch.tensor([0.0], requires_grad=True, device=self.device)
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
+            windowed_gold_mention_cluster_map = []
             end = start + max_segments
             if gold_starts is not None:
                 windowed_gold_starts = []
@@ -658,11 +659,16 @@ class IncrementalCorefModel(CorefModel):
                         windowed_gold_starts.append(gold_start % (segment_size * max_segments))
             if gold_ends is not None:
                 windowed_gold_ends = []
-                for gold_end in gold_ends:
+                for gold_end, cluster in zip(gold_ends, gold_mention_cluster_map):
                     start_offset = (segment_size * max_segments) * i
                     end_offset = start_offset + (segment_size * max_segments)
                     if start_offset <= gold_end and end_offset > gold_end:
                         windowed_gold_ends.append(gold_end % (segment_size * max_segments))
+                        windowed_gold_mention_cluster_map.append(cluster)
+            if gold_mention_cluster_map is None:
+                windowed_gold_mention_cluster_map = None
+            else:
+                windowed_gold_mention_cluster_map = torch.tensor(windowed_gold_mention_cluster_map, device=self.device)
             sentence_map_start = torch.sum(input_mask[:start], (0, 1))
             sentence_map_end = sentence_map_start + torch.sum(input_mask[start:end], (0, 1))
             res = self.get_predictions_incremental_internal(
@@ -675,7 +681,7 @@ class IncrementalCorefModel(CorefModel):
                 is_training,
                 gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
                 gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
-                gold_mention_cluster_map=gold_mention_cluster_map,
+                gold_mention_cluster_map=windowed_gold_mention_cluster_map,
                 entities=entities,
                 do_loss=do_loss,
                 offset=offset,
