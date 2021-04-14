@@ -604,6 +604,10 @@ class IncrementalCorefModel(CorefModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.loss = torch.nn.CrossEntropyLoss()
+        conf = args[0]
+        # This is a really good idea in incremental models, uncomment at your peril
+        # Otherwise only sub-sections of your documents are used, not great...
+        assert conf['long_doc_strategy'] == 'keep'
 
         # Takes concat(entity_representation, span_representation)
         self.entity_representation_gate = nn.Linear(self.span_emb_size * 2, 1)
