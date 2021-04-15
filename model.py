@@ -648,27 +648,20 @@ class IncrementalCorefModel(CorefModel):
         offset = 0
         total_loss = torch.tensor([0.0], requires_grad=True, device=self.device)
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
-            windowed_gold_mention_cluster_map = []
             end = start + max_segments
-            if gold_starts is not None:
-                windowed_gold_starts = []
-                for gold_start in gold_starts:
-                    start_offset = (segment_size * max_segments) * i
-                    end_offset = start_offset + (segment_size * max_segments)
-                    if start_offset <= gold_start and end_offset > gold_start:
-                        windowed_gold_starts.append(gold_start % (segment_size * max_segments))
             if gold_ends is not None:
-                windowed_gold_ends = []
-                for gold_end, cluster in zip(gold_ends, gold_mention_cluster_map):
-                    start_offset = (segment_size * max_segments) * i
-                    end_offset = start_offset + (segment_size * max_segments)
-                    if start_offset <= gold_end and end_offset > gold_end:
-                        windowed_gold_ends.append(gold_end % (segment_size * max_segments))
-                        windowed_gold_mention_cluster_map.append(cluster)
-            if gold_mention_cluster_map is None:
-                windowed_gold_mention_cluster_map = None
+                start_offset = (segment_size * max_segments) * i
+                end_offset = start_offset + (segment_size * max_segments)
+                # We include any gold spans that either end or start in the current window
+                gold_mask = (gold_starts < end_offset) & (gold_starts > start_offset) | ((gold_ends > start_offset) & (gold_ends < end_offset))
+                # Clamp the values to fall into our current window
+                windowed_gold_starts = gold_starts[gold_mask].clamp(start_offset, end_offset) % (segment_size * max_segments)
+                windowed_gold_ends = gold_ends[gold_mask].clamp(start_offset, end_offset) % (segment_size * max_segments)
+                windowed_gold_mention_cluster_map = gold_mention_cluster_map[gold_mask]
             else:
-                windowed_gold_mention_cluster_map = torch.tensor(windowed_gold_mention_cluster_map, device=self.device)
+                windowed_gold_starts = None
+                windowed_gold_ends = None
+                windowed_gold_mention_cluster_map = None
             sentence_map_start = torch.sum(input_mask[:start], (0, 1))
             sentence_map_end = sentence_map_start + torch.sum(input_mask[start:end], (0, 1))
             res = self.get_predictions_incremental_internal(
@@ -679,8 +672,8 @@ class IncrementalCorefModel(CorefModel):
                 genre,
                 sentence_map[sentence_map_start:sentence_map_end],
                 is_training,
-                gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
-                gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
+                gold_starts=windowed_gold_starts,
+                gold_ends=windowed_gold_ends,
                 gold_mention_cluster_map=windowed_gold_mention_cluster_map,
                 entities=entities,
                 do_loss=do_loss,
