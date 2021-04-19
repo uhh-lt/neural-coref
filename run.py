@@ -222,8 +222,11 @@ class Runner:
 
         if official:
             conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
-            official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
-            logger.info('Official avg F1: %.4f' % official_f1)
+            try:
+                official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
+                logger.info('Official avg F1: %.4f' % official_f1)
+            except TypeError: # If any of the f1s are None due to duplicate clusters etc. (may happen early in training)
+                logger.info('Unable to calculate official avg F1')
 
         return f * 100, metrics
 

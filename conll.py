@@ -96,10 +96,13 @@ def official_conll_eval(conll_scorer, gold_path, predicted_path, metric, officia
         logger.info(stdout)
 
     coref_results_match = re.match(COREF_RESULTS_REGEX, stdout)
-    recall = float(coref_results_match.group(1))
-    precision = float(coref_results_match.group(2))
-    f1 = float(coref_results_match.group(3))
-    return {"r": recall, "p": precision, "f": f1}
+    try:
+        recall = float(coref_results_match.group(1))
+        precision = float(coref_results_match.group(2))
+        f1 = float(coref_results_match.group(3))
+        return {"r": recall, "p": precision, "f": f1}
+    except AttributeError: # This happens if we can't calculate it properly in the script for some reason
+        return {"r": None, "p": None, "f": None}
 
 
 def evaluate_conll(conll_scorer, gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True):
