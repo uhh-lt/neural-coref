@@ -647,30 +647,33 @@ class IncrementalCorefModel(CorefModel):
 
         offset = 0
         total_loss = torch.tensor([0.0], requires_grad=True, device=self.device)
+        total_gold_mask = None
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
             end = start + max_segments
+            start_offset = torch.sum(input_mask[:start], (0, 1))
+            delta_offset = torch.sum(input_mask[start:end], (0, 1))
+            end_offset = start_offset + delta_offset
             if gold_ends is not None:
-                start_offset = (segment_size * max_segments) * i
-                end_offset = start_offset + (segment_size * max_segments)
                 # We include any gold spans that either end or start in the current window
                 gold_mask = (gold_starts < end_offset) & (gold_starts > start_offset) | ((gold_ends > start_offset) & (gold_ends < end_offset))
-                # Clamp the values to fall into our current window
-                windowed_gold_starts = gold_starts[gold_mask].clamp(start_offset, end_offset) % (segment_size * max_segments)
-                windowed_gold_ends = gold_ends[gold_mask].clamp(start_offset, end_offset) % (segment_size * max_segments)
+                if total_gold_mask is None:
+                    total_gold_mask = gold_mask
+                else:
+                    total_gold_mask |= gold_mask
+                windowed_gold_starts = gold_starts[gold_mask].clamp(start_offset, end_offset) - start_offset
+                windowed_gold_ends = gold_ends[gold_mask].clamp(start_offset, end_offset) - start_offset
                 windowed_gold_mention_cluster_map = gold_mention_cluster_map[gold_mask]
             else:
                 windowed_gold_starts = None
                 windowed_gold_ends = None
                 windowed_gold_mention_cluster_map = None
-            sentence_map_start = torch.sum(input_mask[:start], (0, 1))
-            sentence_map_end = sentence_map_start + torch.sum(input_mask[start:end], (0, 1))
             res = self.get_predictions_incremental_internal(
                 input_ids[start:end],
                 input_mask[start:end],
                 speaker_ids[start:end],
                 sentence_len[start:end],
                 genre,
-                sentence_map[sentence_map_start:sentence_map_end],
+                sentence_map[start_offset:end_offset],
                 is_training,
                 gold_starts=windowed_gold_starts,
                 gold_ends=windowed_gold_ends,
