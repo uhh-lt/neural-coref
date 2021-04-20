@@ -612,10 +612,8 @@ class IncrementalCorefModel(CorefModel):
         # Takes concat(entity_representation, span_representation)
         self.entity_representation_gate = nn.Linear(self.span_emb_size * 2, 1)
         # self.create_entity = torch.nn.Embedding(1, self.config['feature_emb_size'])
-        self.class_loss = torch.nn.CrossEntropyLoss()
 
     def forward(self, *input, **kwargs):
-        # return self.get_predictions_and_loss(*input)
         return self.get_predictions_incremental(*input, **kwargs)
 
     def update_evaluator(self, span_starts, span_ends, predicted_clusters, mention_to_cluster_id, gold_clusters, evaluator):
@@ -751,6 +749,7 @@ class IncrementalCorefModel(CorefModel):
 
         losses = []
         cpu_loss = 0.0
+        new_cluster_weight = len(labels_for_starts.keys()) / len(top_span_starts)
         for emb, span_start, span_end, mention_score in zip(top_span_emb, top_span_starts, top_span_ends, top_spans['mention_scores']):
             gold_class = labels_for_starts.get((span_start.item(), span_end.item()))
             if len(entities) == 0:
@@ -794,22 +793,28 @@ class IncrementalCorefModel(CorefModel):
                     cluster_to_update = index_to_update - 2
                 else:
                     cluster_to_update = index_to_update - 1
+                weights = torch.ones(scores.squeeze().T.shape)
+                if return_singletons:
+                    weights[1] = new_cluster_weight
+                else:
+                    weights[0] = new_cluster_weight
+                cre_loss = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
                 if gold_class and do_loss:
                     if return_singletons:
                         target = torch.tensor([entities.class_gold_entity.get(gold_class, -2) + 2]).to(device)
                     else:
                         target = torch.tensor([entities.class_gold_entity.get(gold_class, -1) + 1]).to(device)
-                    loss = self.loss(scores.T, target)
+                    loss = cre_loss(scores.T, target)
                     losses.append(loss)
                 elif do_loss:
                     # In this case we are training but don't have a gold label for this span
                     # i.e. the span is not in any gold cluster!
                     if return_singletons:
                         # In this case we add the option to discard a mention
-                        loss = self.loss(scores.T, torch.tensor([1], device=device))
+                        loss = cre_loss(scores.T, torch.tensor([1], device=device))
                     else:
                         # Always create a new singleton cluster hoping nothing else ever gets added
-                        loss = self.loss(scores.T, torch.tensor([0], device=device))
+                        loss = cre_loss(scores.T, torch.tensor([0], device=device))
                     losses.append(loss)
                 if util.cuda_allocated_memory(self.device) > conf['memory_limit'] and len(losses) > 0:
                     sum(losses).backward(retain_graph=True)
