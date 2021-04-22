@@ -225,7 +225,14 @@ class MentionRunner(Runner):
             duplicates_removed[doc_key] = doc_no_duplicates
 
         if official:
-            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, duplicates_removed, stored_info['subtoken_maps'], out_file)
+            conll_results = conll.evaluate_conll(
+                self.config['conll_scorer'],
+                conll_path,
+                duplicates_removed,
+                stored_info['subtoken_maps'],
+                out_file,
+                merge_overlapping_spans=self.config['postprocess_merge_overlapping_spans'],
+            )
             official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
             logger.info('Official avg F1: %.4f' % official_f1)
         return f1, metrics

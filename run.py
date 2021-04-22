@@ -35,6 +35,9 @@ class Runner:
         # Set up config
         self.config = util.initialize_config(config_name)
 
+        # Access it here so lack of it doesn't just crash us in eval
+        _ = self.config['postprocess_merge_overlapping_spans']
+
         # Set up logger
         log_path = join(self.config['log_dir'], 'log_' + self.name_suffix + '.txt')
         logger.addHandler(logging.FileHandler(log_path, 'a'))
@@ -221,7 +224,14 @@ class Runner:
                 tb_writer.add_scalar(name, score, step)
 
         if official:
-            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
+            conll_results = conll.evaluate_conll(
+                self.config['conll_scorer'],
+                conll_path,
+                doc_to_prediction,
+                stored_info['subtoken_maps'],
+                out_file,
+                merge_overlapping_spans=self.config['postprocess_merge_overlapping_spans'],
+            )
             try:
                 official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
                 logger.info('Official avg F1: %.4f' % official_f1)
