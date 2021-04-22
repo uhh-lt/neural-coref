@@ -35,6 +35,9 @@ class Runner:
         # Set up config
         self.config = util.initialize_config(config_name)
 
+        # Access it here so lack of it doesn't just crash us in eval
+        _ = self.config['postprocess_merge_overlapping_spans']
+
         # Set up logger
         log_path = join(self.config['log_dir'], 'log_' + self.name_suffix + '.txt')
         logger.addHandler(logging.FileHandler(log_path, 'a'))
@@ -107,7 +110,17 @@ class Runner:
                 # Forward pass
                 model.train()
                 example_gpu = [d.to(self.device) for d in example]
-                _, loss = model(*example_gpu)
+                if not conf['incremental']:
+                    _, loss = model(*example_gpu)
+                else:
+                    min_loss_chance = conf['incremental_start_global_loss_ratio']
+                    loss_delta = conf['incremental_end_global_loss_ratio'] - min_loss_chance
+                    global_loss_chance = loss_delta * (len(loss_history) / total_update_steps) + min_loss_chance
+                    _, loss = model(
+                        *example_gpu,
+                        global_loss_chance=global_loss_chance,
+                        teacher_forcing=conf["incremental_teacher_forcing"],
+                    )
 
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
@@ -118,7 +131,7 @@ class Runner:
                     torch.nn.utils.clip_grad_norm_(bert_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(task_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(incremental_param, conf['max_grad_norm'])
-                if not conf["incremental"]:
+                if not conf['incremental']:
                     loss_during_accum.append(loss.item())
                 else:
                     loss_during_accum.append(loss)
@@ -211,9 +224,19 @@ class Runner:
                 tb_writer.add_scalar(name, score, step)
 
         if official:
-            conll_results = conll.evaluate_conll(self.config['conll_scorer'], conll_path, doc_to_prediction, stored_info['subtoken_maps'], out_file)
-            official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
-            logger.info('Official avg F1: %.4f' % official_f1)
+            conll_results = conll.evaluate_conll(
+                self.config['conll_scorer'],
+                conll_path,
+                doc_to_prediction,
+                stored_info['subtoken_maps'],
+                out_file,
+                merge_overlapping_spans=self.config['postprocess_merge_overlapping_spans'],
+            )
+            try:
+                official_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
+                logger.info('Official avg F1: %.4f' % official_f1)
+            except TypeError: # If any of the f1s are None due to duplicate clusters etc. (may happen early in training)
+                logger.info('Unable to calculate official avg F1')
 
         return f * 100, metrics
 

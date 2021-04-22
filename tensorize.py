@@ -5,6 +5,7 @@ from transformers import BertTokenizer
 import os
 from os.path import join
 import json
+import itertools
 import pickle
 import logging
 import torch
@@ -20,6 +21,9 @@ class CorefDataProcessor:
         self.max_seg_len = config['max_segment_len']
         self.max_training_seg = config['max_training_sentences']
         self.data_dir = config['data_dir']
+        self.long_doc_strategy = config['long_doc_strategy']
+        if self.long_doc_strategy not in ['keep', 'truncate', 'split', 'even-chunks']:
+            raise Exception("Invalid strategy for long documnets, use either 'keep', 'truncate', 'split' or 'even-chunks'")
 
         # Get tensorized samples
         cache_path = self.get_cache_path()
@@ -42,7 +46,10 @@ class CorefDataProcessor:
                 is_training = (split == 'trn')
                 with open(path, 'r') as f:
                     samples = [json.loads(line) for line in f.readlines()]
-                tensor_samples = [tensorizer.tensorize_example(sample, is_training) for sample in samples]
+                tensor_samples = itertools.chain(
+                    *(tensorizer.tensorize_example(sample, is_training) for sample in samples)
+                )
+                tensor_samples = list(tensor_samples)
                 self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor in tensor_samples]
             self.stored_info = tensorizer.stored_info
             # Cache tensorized samples
@@ -73,13 +80,17 @@ class CorefDataProcessor:
         return self.stored_info
 
     def get_cache_path(self):
-        cache_path = join(self.data_dir, f'cached.tensors.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
+        name = f'cached.tensors.{self.language}.{self.max_seg_len}.{self.max_training_seg}'
+        name += f'.split={self.long_doc_strategy}'
+        name += '.bin'
+        cache_path = join(self.data_dir, name)
         return cache_path
 
 
 class Tensorizer:
     def __init__(self, config):
         self.config = config
+        self.long_doc_strategy = config['long_doc_strategy']
         self.tokenizer = BertTokenizer.from_pretrained(config['bert_tokenizer_name'])
 
         # Will be used in evaluation
@@ -164,15 +175,49 @@ class Tensorizer:
                           gold_starts, gold_ends, gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
-            return doc_key, self.truncate_example(*example_tensor)
+            if self.long_doc_strategy == 'split':
+                out = []
+                for sentence_offset in range(0, len(sentences), self.config['max_training_sentences']):
+                    out.append((
+                        f'{doc_key}_{sentence_offset}',
+                        self.truncate_example(*example_tensor, sentence_offset=sentence_offset)
+                    ))
+                return out
+            elif self.long_doc_strategy == 'truncate':
+                return [(doc_key, self.truncate_example(*example_tensor))]
+            elif self.long_doc_strategy == 'even-chunks':
+                out = []
+                max_len = self.config["max_training_sentences"]
+                n = len(sentences)
+                buckets = min(n, (len(sentences) + max_len - 1) // max_len)
+                floor = n // buckets 
+                ceiling = floor + 1
+                stepdown = n % buckets
+                offset = 0
+                for _ in range(stepdown):
+                    out.append((
+                        f'{doc_key}_{offset}',
+                        self.truncate_example(*example_tensor, max_sentences=ceiling, sentence_offset=offset)
+                    ))
+                    offset += ceiling
+                for _ in range(stepdown, buckets):
+                    out.append((
+                        f'{doc_key}_{offset}',
+                        self.truncate_example(*example_tensor, max_sentences=floor, sentence_offset=offset)
+                    ))
+                    offset += floor
+                return out
+            else:
+                return [(doc_key, example_tensor)]
         else:
-            return doc_key, example_tensor
+            return [(doc_key, example_tensor)]
 
     def truncate_example(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                         gold_starts, gold_ends, gold_mention_cluster_map, sentence_offset=None):
-        max_sentences = self.config["max_training_sentences"]
+                         gold_starts, gold_ends, gold_mention_cluster_map, max_sentences=None, sentence_offset=None):
+
+        max_sentences = self.config["max_training_sentences"] if max_sentences is None else max_sentences
         num_sentences = input_ids.shape[0]
-        assert num_sentences > max_sentences
+        assert num_sentences >= max_sentences
 
         sent_offset = sentence_offset
         if sent_offset is None:

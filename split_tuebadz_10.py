@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Perfrom 20-20-60 split as perfomred in IMS HotCoref paper.
+Perfrom 20-20-60 split as performed in IMS HotCoref paper.
 """
 import sys
 
 f = open(sys.argv[1])
 
-splits = [(727, "test.german.tuebdz_gold_conll"), (727, "dev.german.tuebdz_gold_conll"), (2190, "train.german.tuebdz_gold_conll")]
+splits = [(727, "test.german.tuba10_gold_conll"), (727, "dev.german.tuba10_gold_conll"), (2190, "train.german.tuba10_gold_conll")]
 
 out_files = []
 for _, split in splits:

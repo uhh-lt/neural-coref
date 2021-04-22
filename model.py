@@ -7,7 +7,7 @@ from collections import Iterable, defaultdict
 import numpy as np
 import torch.nn.init as init
 import higher_order as ho
-from entities import IncrementalEntities
+from entities import IncrementalEntities, GoldLabelStrategy
 from torch import Tensor
 from collections import OrderedDict
 
@@ -76,13 +76,20 @@ class CorefModel(nn.Module):
         if state_dict['emb_antecedent_distance_prior.weight'].shape != new_shape:
             logger.warn('Saved embedding for distance is of different size, some values are initialized randomly.')
             for weight_name in ['emb_antecedent_distance_prior.weight', 'emb_top_antecedent_distance.weight']:
-                state_dict[weight_name] = self.initialize_larger_embedding_layer(
+                state_dict[weight_name] = self.initialize_differently_sized_embedding_layer(
                     state_dict[weight_name],
                     new_shape[0],
                 )
+        new_shape = (self.config['max_training_sentences'], self.config['feature_emb_size'])
+        if state_dict['emb_segment_distance.weight'].shape != new_shape:
+            logger.warn('Saved embedding for segment distance is of different size, some values are initialized randomly.')
+            state_dict['emb_segment_distance.weight'] = self.initialize_differently_sized_embedding_layer(
+                state_dict['emb_segment_distance.weight'],
+                new_shape[0],
+            )
         return super().load_state_dict(state_dict, strict=strict)
 
-    def initialize_larger_embedding_layer(self, old_tensor, new_input_size, std=0.02):
+    def initialize_differently_sized_embedding_layer(self, old_tensor, new_input_size, std=0.02):
         old_shape = old_tensor.shape
         new_weight = torch.empty(
             (new_input_size, self.config["feature_emb_size"]),
@@ -90,8 +97,8 @@ class CorefModel(nn.Module):
         )
         init.normal_(new_weight, std=std)
         new_weight[
-            :old_shape[0], :self.config["feature_emb_size"]
-        ] = old_tensor
+            :min(old_shape[0], new_weight.shape[0]), :min(self.config["feature_emb_size"], new_weight.shape[1])
+        ] = old_tensor[:new_weight.shape[0], :new_weight.shape[1]]
         return new_weight
 
     def make_embedding(self, dict_size, std=0.02):
@@ -597,15 +604,17 @@ class IncrementalCorefModel(CorefModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.loss = torch.nn.CrossEntropyLoss()
+        conf = args[0]
+        # This is a really good idea in incremental models, uncomment at your peril
+        # Otherwise only sub-sections of your documents are used, not great...
+        assert conf['long_doc_strategy'] == 'keep'
 
         # Takes concat(entity_representation, span_representation)
         self.entity_representation_gate = nn.Linear(self.span_emb_size * 2, 1)
         # self.create_entity = torch.nn.Embedding(1, self.config['feature_emb_size'])
-        self.class_loss = torch.nn.CrossEntropyLoss()
 
-    def forward(self, *input):
-        # return self.get_predictions_and_loss(*input)
-        return self.get_predictions_incremental(*input)
+    def forward(self, *input, **kwargs):
+        return self.get_predictions_incremental(*input, **kwargs)
 
     def update_evaluator(self, span_starts, span_ends, predicted_clusters, mention_to_cluster_id, gold_clusters, evaluator):
         mention_to_predicted = {m: tuple(predicted_clusters[cluster_idx]) for m, cluster_idx in mention_to_cluster_id.items()}
@@ -614,14 +623,19 @@ class IncrementalCorefModel(CorefModel):
         evaluator.update(predicted_clusters, gold_clusters, mention_to_predicted, mention_to_gold)
 
     def get_predictions_incremental(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
-                                    is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
+                                    is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
+                                    global_loss_chance=0.0, teacher_forcing=False):
         max_segments = 5
         segment_size = input_ids.shape[-1]
 
         mention_to_cluster_id = {}
         predicted_clusters = []
         entities = None
-        cpu_entities = IncrementalEntities(conf=self.config, device="cpu")
+        if torch.rand(1) < global_loss_chance:
+            loss_strategy = GoldLabelStrategy.ORIGINAL
+        else:
+            loss_strategy = GoldLabelStrategy.MOST_RECENT
+        cpu_entities = IncrementalEntities(conf=self.config, device="cpu", gold_strategy=loss_strategy)
 
         do_loss = False
         if gold_mention_cluster_map is not None:
@@ -631,38 +645,42 @@ class IncrementalCorefModel(CorefModel):
 
         offset = 0
         total_loss = torch.tensor([0.0], requires_grad=True, device=self.device)
+        total_gold_mask = None
         for i, start in enumerate(range(0, input_ids.shape[0], max_segments)):
             end = start + max_segments
-            if gold_starts is not None:
-                windowed_gold_starts = []
-                for gold_start in gold_starts:
-                    start_offset = (segment_size * max_segments) * i
-                    end_offset = start_offset + (segment_size * max_segments)
-                    if start_offset <= gold_start and end_offset > gold_start:
-                        windowed_gold_starts.append(gold_start % (segment_size * max_segments))
+            start_offset = torch.sum(input_mask[:start], (0, 1))
+            delta_offset = torch.sum(input_mask[start:end], (0, 1))
+            end_offset = start_offset + delta_offset
             if gold_ends is not None:
-                windowed_gold_ends = []
-                for gold_end in gold_ends:
-                    start_offset = (segment_size * max_segments) * i
-                    end_offset = start_offset + (segment_size * max_segments)
-                    if start_offset <= gold_end and end_offset > gold_end:
-                        windowed_gold_ends.append(gold_end % (segment_size * max_segments))
-            sentence_map_start = torch.sum(input_mask[:start], (0, 1))
-            sentence_map_end = sentence_map_start + torch.sum(input_mask[start:end], (0, 1))
+                # We include any gold spans that either end or start in the current window
+                gold_mask = (gold_starts < end_offset) & (gold_starts > start_offset) | ((gold_ends > start_offset) & (gold_ends < end_offset))
+                if total_gold_mask is None:
+                    total_gold_mask = gold_mask
+                else:
+                    total_gold_mask |= gold_mask
+                windowed_gold_starts = gold_starts[gold_mask].clamp(start_offset, end_offset) - start_offset
+                windowed_gold_ends = gold_ends[gold_mask].clamp(start_offset, end_offset) - start_offset
+                windowed_gold_mention_cluster_map = gold_mention_cluster_map[gold_mask]
+            else:
+                windowed_gold_starts = None
+                windowed_gold_ends = None
+                windowed_gold_mention_cluster_map = None
             res = self.get_predictions_incremental_internal(
                 input_ids[start:end],
                 input_mask[start:end],
                 speaker_ids[start:end],
                 sentence_len[start:end],
                 genre,
-                sentence_map[sentence_map_start:sentence_map_end],
+                sentence_map[start_offset:end_offset],
                 is_training,
-                gold_starts=torch.tensor(windowed_gold_starts, device=self.device) if gold_starts is not None else None,
-                gold_ends=torch.tensor(windowed_gold_ends, device=self.device) if gold_ends is not None else None,
-                gold_mention_cluster_map=gold_mention_cluster_map,
+                gold_starts=windowed_gold_starts,
+                gold_ends=windowed_gold_ends,
+                gold_mention_cluster_map=windowed_gold_mention_cluster_map,
                 entities=entities,
                 do_loss=do_loss,
-                offset=offset
+                offset=offset,
+                loss_strategy=loss_strategy,
+                teacher_forcing=teacher_forcing,
             )
             offset += torch.sum(input_mask[start:end], (0, 1)).item()
             if do_loss:
@@ -672,7 +690,9 @@ class IncrementalCorefModel(CorefModel):
                 entities, new_cpu_entities  = res
             cpu_entities.extend(new_cpu_entities)
         cpu_entities.extend(entities)
-        starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result()
+        starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result(
+            remove_singletons=not self.config['incremental_singletons']
+        )
         out = [
             starts,
             ends,
@@ -686,9 +706,11 @@ class IncrementalCorefModel(CorefModel):
 
     def get_predictions_incremental_internal(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                              is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
-                                             entities=None, do_loss=None, offset=0):
+                                             entities=None, do_loss=None, offset=0, loss_strategy=GoldLabelStrategy.MOST_RECENT,
+                                             teacher_forcing=False):
         device = self.device
         conf = self.config
+        return_singletons = conf['incremental_singletons']
 
         # The model should already be trained so we detach the BERT part, massively improving performance
         mention_doc = self.bert(input_ids, attention_mask=input_mask)[0].detach()  # [num seg, num max tokens, emb size]
@@ -718,15 +740,16 @@ class IncrementalCorefModel(CorefModel):
         top_span_emb = top_spans['emb']
 
         new_cluster_threshold = torch.tensor([conf['new_cluster_threshold']]).unsqueeze(0).to(device)
-        cpu_entities = IncrementalEntities(conf, "cpu")
+        cpu_entities = IncrementalEntities(conf, "cpu", gold_strategy=loss_strategy)
         if entities is None:
-            entities = IncrementalEntities(conf, device)
+            entities = IncrementalEntities(conf, device, gold_strategy=loss_strategy)
 
         if len(top_span_emb.shape) == 1:
             top_span_emb = top_span_emb.unsqueeze(0)
 
         losses = []
         cpu_loss = 0.0
+        new_cluster_weight = len(labels_for_starts.keys()) / len(top_span_starts)
         for emb, span_start, span_end, mention_score in zip(top_span_emb, top_span_starts, top_span_ends, top_spans['mention_scores']):
             gold_class = labels_for_starts.get((span_start.item(), span_end.item()))
             if len(entities) == 0:
@@ -759,28 +782,56 @@ class IncrementalCorefModel(CorefModel):
                 # It's important for us to also involve the mention span scores, the only way to prune discovered spans is by turning them into singleton clusters
                 # This is encouraged by explicitly involving the sum of the mention scores
                 original_scores = self.coref_score_ffnn(pair_emb) + fast_coref_scores
-                scores = torch.cat([new_cluster_threshold, original_scores])
+                if return_singletons:
+                    scores = torch.cat([new_cluster_threshold, -mention_score.view(1, 1), original_scores])
+                else:
+                    scores = torch.cat([new_cluster_threshold, original_scores])
                 dist = torch.softmax(scores, 0)
 
                 index_to_update = dist.argmax()
-                cluster_to_update = index_to_update - 1
-
+                if return_singletons:
+                    cluster_to_update = index_to_update - 2
+                else:
+                    cluster_to_update = index_to_update - 1
+                weights = torch.ones(scores.squeeze().T.shape)
+                if return_singletons:
+                    weights[1] = new_cluster_weight
+                else:
+                    weights[0] = new_cluster_weight
+                cre_loss = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
                 if gold_class and do_loss:
-                    target = torch.tensor([entities.class_most_recent_entity.get(gold_class, -1) + 1]).to(device)
-                    loss = self.loss(scores.T, target)
+                    if return_singletons:
+                        target = torch.tensor([entities.class_gold_entity.get(gold_class, -2) + 2]).to(device)
+                    else:
+                        target = torch.tensor([entities.class_gold_entity.get(gold_class, -1) + 1]).to(device)
+                    loss = cre_loss(scores.T, target)
                     losses.append(loss)
                 elif do_loss:
                     # In this case we are training but don't have a gold label for this span
                     # i.e. the span is not in any gold cluster!
-                    # Always create a new singleton cluster hoping nothing else ever gets added
-                    loss = self.loss(scores.T, torch.tensor([0], device=device))
+                    if return_singletons:
+                        # In this case we add the option to discard a mention
+                        loss = cre_loss(scores.T, torch.tensor([1], device=device))
+                    else:
+                        # Always create a new singleton cluster hoping nothing else ever gets added
+                        loss = cre_loss(scores.T, torch.tensor([0], device=device))
                     losses.append(loss)
-                if util.cuda_allocated_memory() > conf['memory_limit'] and len(losses) > 0:
+                if util.cuda_allocated_memory(self.device) > conf['memory_limit'] and len(losses) > 0:
                     sum(losses).backward(retain_graph=True)
                     cpu_loss += sum(losses).item()
                     losses = []
+                if teacher_forcing:
+                    forced_class = entities.class_gold_entity.get(gold_class)
+                    if forced_class is None:
+                        cluster_to_update = None
+                    else:
+                        cluster_to_update = torch.tensor(forced_class)
+                    if cluster_to_update is None:
+                        index_to_update = 0
                 if index_to_update == 0:
                     entities.add_entity(emb, gold_class, span_start, span_end, offset=offset)
+                elif index_to_update == 1 and return_singletons:
+                    pass
                 else:
                     update_gate = torch.sigmoid(
                         self.entity_representation_gate(torch.cat(
@@ -789,7 +840,15 @@ class IncrementalCorefModel(CorefModel):
                                 entities.emb[cluster_to_update],
                             ],
                         )))
-                    entities.update_entity(cluster_to_update, emb, gold_class, span_start, span_end, update_gate, offset=offset)
+                    entities.update_entity(
+                        cluster_to_update,
+                        emb,
+                        gold_class,
+                        span_start,
+                        span_end,
+                        update_gate,
+                        offset=offset
+                    )
 
         if len(losses) > 0:
             sum(losses).backward(retain_graph=True)

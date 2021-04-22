@@ -7,7 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-BEGIN_DOCUMENT_REGEX = re.compile(r"#begin document (.*)(?:\.|_)(\d+)")  # First line at each document
+BEGIN_DOCUMENT_REGEX = re.compile(r"#begin document (.*)(?:\.|_)(\d+_?\d*)")  # First line at each document
 COREF_RESULTS_REGEX = re.compile(r".*Coreference: Recall: \([0-9.]+ / [0-9.]+\) ([0-9.]+)%\tPrecision: \([0-9.]+ / [0-9.]+\) ([0-9.]+)%\tF1: ([0-9.]+)%.*", re.DOTALL)
 REMOVE_MENTION_MARKUP = re.compile(r"\(?(\d+)\)?")
 
@@ -16,7 +16,7 @@ def get_doc_key(doc_id, part):
     return "{}_{}".format(doc_id, int(part))
 
 
-def output_conll(input_file, output_file, predictions, subtoken_map):
+def output_conll(input_file, output_file, predictions, subtoken_map, merge_overlapping_spans):
     prediction_map = {}
     for doc_key, clusters in predictions.items():
         start_map = collections.defaultdict(list)
@@ -37,6 +37,7 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
         prediction_map[doc_key] = (start_map, end_map, word_map)
 
     word_index = 0
+    active_count = collections.Counter()
     for line in input_file.readlines():
         row = line.split()
         if len(row) == 0:
@@ -44,6 +45,8 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
         elif row[0].startswith("#"):
             begin_match = re.match(BEGIN_DOCUMENT_REGEX, line)
             if begin_match:
+                # Reset at the start of each document
+                active_count = collections.Counter()
                 doc_key = get_doc_key(begin_match.group(1), begin_match.group(2))
                 start_map, end_map, word_map = prediction_map[doc_key]
                 word_index = 0
@@ -57,13 +60,22 @@ def output_conll(input_file, output_file, predictions, subtoken_map):
             coref_list = []
             if word_index in end_map:
                 for cluster_id in end_map[word_index]:
-                    coref_list.append("{})".format(cluster_id))
+                    active_count[cluster_id] -= 1
+                    if active_count[cluster_id] == 0 or not merge_overlapping_spans:
+                        coref_list.append("{})".format(cluster_id))
             if word_index in word_map:
-                for cluster_id in set(word_map[word_index]):
-                    coref_list.append("({})".format(cluster_id))
+                if merge_overlapping_spans:
+                    for cluster_id in set(word_map[word_index]) - set(start_map[word_index]) - set(end_map[word_index]):
+                        if active_count[cluster_id] == 0:
+                            coref_list.append("({})".format(cluster_id))
+                else:
+                    for cluster_id in set(word_map[word_index]):
+                        coref_list.append("({})".format(cluster_id))
             if word_index in start_map:
                 for cluster_id in start_map[word_index]:
-                    coref_list.append("({}".format(cluster_id))
+                    active_count[cluster_id] += 1
+                    if active_count[cluster_id] == 1 or not merge_overlapping_spans:
+                        coref_list.append("({}".format(cluster_id))
 
             if len(coref_list) == 0:
                 row[-1] = "-"
@@ -90,16 +102,19 @@ def official_conll_eval(conll_scorer, gold_path, predicted_path, metric, officia
         logger.info(stdout)
 
     coref_results_match = re.match(COREF_RESULTS_REGEX, stdout)
-    recall = float(coref_results_match.group(1))
-    precision = float(coref_results_match.group(2))
-    f1 = float(coref_results_match.group(3))
-    return {"r": recall, "p": precision, "f": f1}
+    try:
+        recall = float(coref_results_match.group(1))
+        precision = float(coref_results_match.group(2))
+        f1 = float(coref_results_match.group(3))
+        return {"r": recall, "p": precision, "f": f1}
+    except AttributeError: # This happens if we can't calculate it properly in the script for some reason
+        return {"r": None, "p": None, "f": None}
 
 
-def evaluate_conll(conll_scorer, gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True):
+def evaluate_conll(conll_scorer, gold_path, predictions, subtoken_maps, out_file=None, official_stdout=True, merge_overlapping_spans=False):
     with open(out_file, "w") if out_file is not None else tempfile.NamedTemporaryFile(delete=True, mode="w") as prediction_file:
         with open(gold_path, "r") as gold_file:
-            output_conll(gold_file, prediction_file, predictions, subtoken_maps)
+            output_conll(gold_file, prediction_file, predictions, subtoken_maps, merge_overlapping_spans=merge_overlapping_spans)
         # logger.info("Predicted conll file: {}".format(prediction_file.name))
         results = {m: official_conll_eval(conll_scorer, gold_file.name, prediction_file.name, m, official_stdout) for m in ("muc", "bcub", "ceafe") }
     return results
