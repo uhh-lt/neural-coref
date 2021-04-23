@@ -32,7 +32,7 @@ class CorefHandler(BaseHandler):
         self.device = torch.device(properties.get("gpu_id") if torch.cuda.is_available() else "cpu")
         device_id = properties.get("gpu_id") if torch.cuda.is_available() else None
 
-        self.runner = Runner(context.model_name, device_id, skip_data_loading=True)
+        self.runner = Runner(context.model_name, device_id, skip_data_loading=True, log_to_file=False)
         self.model = self.runner.initialize_model()
         self.model.to(self.device)
         self.tensorizer = Tensorizer(self.runner.config)
