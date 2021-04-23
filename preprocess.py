@@ -195,33 +195,48 @@ def get_document(doc_key, doc_lines, language, seg_len, tokenizer, input_format)
         word_col = 3
     elif input_format == 'semeval-2010':
         word_col = 1
-    elif input_format == 'token_only':
+    elif input_format == 'nested_list':
         word_col = 0
     else:
         raise Exception(f"Invalid input format '{input_format}'")
 
     # Build up documents
-    for line in doc_lines:
-        row = line.split()  # Columns for each token
-        if len(row) == 0:
-            document_state.sentence_end[-1] = True
-        else:
-            if input_format != 'token_only':
+    if input_format != 'nested_list':
+        for line in doc_lines:
+            row = line.split()  # Columns for each token
+            if len(row) == 0:
+                document_state.sentence_end[-1] = True
+            else:
                 assert len(row) >= 12
-            word_idx += 1
-            word = normalize_word(row[word_col], language)
-            subtokens = tokenizer.tokenize(word)
-            document_state.tokens.append(word)
-            document_state.token_end += [False] * (len(subtokens) - 1) + [True]
-            for idx, subtoken in enumerate(subtokens):
-                document_state.subtokens.append(subtoken)
-                if idx != 0 or input_format == 'token_only':
+                word_idx += 1
+                word = normalize_word(row[word_col], language)
+                subtokens = tokenizer.tokenize(word)
+                document_state.tokens.append(word)
+                document_state.token_end += [False] * (len(subtokens) - 1) + [True]
+                for idx, subtoken in enumerate(subtokens):
+                    document_state.subtokens.append(subtoken)
+                    if idx != 0:
+                        info = None
+                    else:
+                        info = (row + [len(subtokens)])
+                    document_state.info.append(info)
+                    document_state.sentence_end.append(False)
+                    document_state.subtoken_map.append(word_idx)
+    else:
+        for sentence in doc_lines:
+            for token in sentence:
+                word_idx += 1
+                word = normalize_word(token, language)
+                subtokens = tokenizer.tokenize(word)
+                document_state.tokens.append(word)
+                document_state.token_end += [False] * (len(subtokens) - 1) + [True]
+                for idx, subtoken in enumerate(subtokens):
+                    document_state.subtokens.append(subtoken)
                     info = None
-                else:
-                    info = (row + [len(subtokens)])
-                document_state.info.append(info)
-                document_state.sentence_end.append(False)
-                document_state.subtoken_map.append(word_idx)
+                    document_state.info.append(info)
+                    document_state.sentence_end.append(False)
+                    document_state.subtoken_map.append(word_idx)
+            document_state.sentence_end[-1] = True
 
     # Split documents
     constraits1 = document_state.sentence_end if language != 'arabic' else document_state.token_end
