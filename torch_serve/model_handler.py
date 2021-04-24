@@ -116,10 +116,11 @@ class CorefHandler(BaseHandler):
             return [text]
         elif output_mode == "conll":
             lines = [f"#begin document {DOC_NAME}"]
-            for sentence in tokenized_sentences:
-                for token in sentence:
-                    line = ["memory_file", token] + ["-"] * 8
+            for sentence_id, sentence in enumerate(tokenized_sentences, 1):
+                for word_id, token in enumerate(sentence, 1):
+                    line = ["memory_file", str(sentence_id), str(word_id), token] + ["-"] * 9
                     lines.append("\t".join(line))
+                lines.append("\n")
             lines.append("#end document")
             input_file = io.StringIO(
                 "\n".join(lines)
