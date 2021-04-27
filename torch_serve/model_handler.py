@@ -5,6 +5,7 @@ import io
 import torch
 from ts.torch_handler.base_handler import BaseHandler
 from transformers import BertTokenizer, ElectraTokenizer
+from transformers.models.bert import BasicTokenizer
 
 from run import Runner
 from preprocess import get_document
@@ -39,6 +40,7 @@ class CorefHandler(BaseHandler):
         self.tensorizer = Tensorizer(self.runner.config)
         self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.model.eval()
+        self.basic_tokenizer = BasicTokenizer(do_lower_case=False)
         if self.runner.config['model_type'] == 'electra':
             self.tokenizer = ElectraTokenizer.from_pretrained(self.runner.config['bert_tokenizer_name'], strip_accents=False)
         else:
@@ -49,7 +51,7 @@ class CorefHandler(BaseHandler):
             self.tensorizer.long_doc_strategy = "discard"
 
     def text_to_token_list(self, text):
-        words = self.tokenizer.basic_tokenizer.tokenize(text)
+        words = self.basic_tokenizer.tokenize(text)
         out = []
         sentence = []
         for word in words:
