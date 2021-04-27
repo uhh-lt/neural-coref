@@ -10,6 +10,7 @@ from run import Runner
 from preprocess import get_document
 from tensorize import Tensorizer
 from conll import output_conll
+import model_config
 
 SENTENCE_ENDERS = "!.?"
 SUBSCRIPT = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
@@ -32,7 +33,7 @@ class CorefHandler(BaseHandler):
         self.device = torch.device(properties.get("gpu_id") if torch.cuda.is_available() else "cpu")
         device_id = properties.get("gpu_id") if torch.cuda.is_available() else None
 
-        self.runner = Runner(context.model_name, device_id, skip_data_loading=True, log_to_file=False)
+        self.runner = Runner(model_config.MODELNAME, device_id, skip_data_loading=True, log_to_file=False)
         self.model = self.runner.initialize_model()
         self.model.to(self.device)
         self.tensorizer = Tensorizer(self.runner.config)

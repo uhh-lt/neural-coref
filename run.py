@@ -33,7 +33,7 @@ class Runner:
         self.seed = seed
 
         # Set up config
-        self.config = util.initialize_config(config_name)
+        self.config = util.initialize_config(config_name, create_dirs=log_to_file)
 
         # Access it here so lack of it doesn't just crash us in eval
         _ = self.config['postprocess_merge_overlapping_spans']
