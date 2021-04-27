@@ -13,6 +13,8 @@ Optionally supply 'c2f' or 'incremental' as the model type (defaults to incremen
 
 ```
 
+### Torchserve
+
 Using torchserve models saved in this manner can be served, e.g.:
 
 ```
@@ -20,6 +22,22 @@ torchserve --models droc_incremental=<model_name>.mar
 ```
 
 Since native dependencies were causing issues we have a custom torchserve docker image in `docker/`.
+
+### Torchserve-API
+The model handlers essentially provide the http API, there are two modes of operation for our handlers.
+* Using raw text
+* Using pretokenized text
+
+Raw text is usefull for direct visualization (example requests made using http),
+in this context you may also want to try the 'raw' output mode for relatively human-friendly text.
+```
+http http://127.0.0.1:8080/predictions/<model_name> output_format=raw tokenized_sentences="Die Organisation gab bekannt sie habe Spenden veruntreut."
+```
+
+In the context of a larger language pipeline, pretokenization is often desirable:
+```
+http http://127.0.0.1:8080/predictions/<model_name> output_format=conll tokenized_sentences:='[["Die", "Organisation", "gab", "bekannt", "sie", "habe", "Spenden", "veruntreut", "."], ["Next", "sentence", "goes", "here", "!"]]'
+```
 
 ## Architecture
 
