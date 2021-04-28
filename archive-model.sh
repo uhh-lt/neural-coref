@@ -42,7 +42,7 @@ then
     WINDOWSIZE="384"
 fi
 
-echo "WINDOWSIZE='$WINDOWSIZE'" >> torch_serve/model_config.py
+echo "WINDOWSIZE=$WINDOWSIZE" >> torch_serve/model_config.py
 
 $ARCHIVER \
     --model-name $1 \
