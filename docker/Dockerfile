@@ -1,4 +1,4 @@
-ARG TORCHSERVE_TAG=latest
+ARG TORCHSERVE_TAG=0.3.0-cpu
 FROM pytorch/torchserve:${TORCHSERVE_TAG}
 
 COPY requirements.txt .
