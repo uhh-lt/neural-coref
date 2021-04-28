@@ -14,15 +14,15 @@ def flatten(l):
     return [item for sublist in l for item in sublist]
 
 
-def initialize_config(config_name):
+def initialize_config(config_name, create_dirs=True):
     logger.info("Running experiment: {}".format(config_name))
 
     config = pyhocon.ConfigFactory.parse_file("experiments.conf")[config_name]
     config['log_dir'] = join(config["log_root"], config_name)
-    makedirs(config['log_dir'], exist_ok=True)
-
     config['tb_dir'] = join(config['log_root'], 'tensorboard')
-    makedirs(config['tb_dir'], exist_ok=True)
+    if create_dirs:
+        makedirs(config['log_dir'], exist_ok=True)
+        makedirs(config['tb_dir'], exist_ok=True)
 
     logger.info(pyhocon.HOCONConverter.convert(config, "hocon"))
     return config

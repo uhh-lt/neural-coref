@@ -26,22 +26,23 @@ logger = logging.getLogger()
 
 
 class Runner:
-    def __init__(self, config_name, gpu_id=0, seed=None, skip_data_loading=False):
+    def __init__(self, config_name, gpu_id=0, seed=None, skip_data_loading=False, log_to_file=True):
         self.name = config_name
         self.name_suffix = datetime.now().strftime('%b%d_%H-%M-%S')
         self.gpu_id = gpu_id
         self.seed = seed
 
         # Set up config
-        self.config = util.initialize_config(config_name)
+        self.config = util.initialize_config(config_name, create_dirs=log_to_file)
 
         # Access it here so lack of it doesn't just crash us in eval
         _ = self.config['postprocess_merge_overlapping_spans']
 
         # Set up logger
-        log_path = join(self.config['log_dir'], 'log_' + self.name_suffix + '.txt')
-        logger.addHandler(logging.FileHandler(log_path, 'a'))
-        logger.info('Log file path: %s' % log_path)
+        if log_to_file:
+            log_path = join(self.config['log_dir'], 'log_' + self.name_suffix + '.txt')
+            logger.addHandler(logging.FileHandler(log_path, 'a'))
+            logger.info('Log file path: %s' % log_path)
 
         # Set up seed
         if seed:

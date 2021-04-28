@@ -2,7 +2,42 @@ This repository is currently in sync with this [repo](https://github.com/emorynl
 
 # End-to-End Coreference Resolution with Different Higher-Order Inference Methods
 
-This repository contains the implementation of the paper: [Revealing the Myth of Higher-Order Inference in Coreference Resolution](https://arxiv.org/abs/2009.12013).
+## Model Archival
+
+For inference usage the models can be served using torchserve.
+Using the model name from the experiments.conf and the relative path to the model binary, create a model archive.
+Optionally supply 'c2f' or 'incremental' as the model type (defaults to incremental).
+```
+
+./archive-model.sh <model_name> <path_to_model/model.bin> [MODEL_VARIANT]
+
+```
+
+### Torchserve
+
+Using torchserve models saved in this manner can be served, e.g.:
+
+```
+torchserve --models droc_incremental=<model_name>.mar
+```
+
+Since native dependencies were causing issues we have a custom torchserve docker image in `docker/`.
+
+### Torchserve-API
+The model handlers essentially provide the http API, there are two modes of operation for our handlers.
+* Using raw text
+* Using pretokenized text
+
+Raw text is usefull for direct visualization (example requests made using http),
+in this context you may also want to try the 'raw' output mode for relatively human-friendly text.
+```
+http http://127.0.0.1:8080/predictions/<model_name> output_format=raw tokenized_sentences="Die Organisation gab bekannt sie habe Spenden veruntreut."
+```
+
+In the context of a larger language pipeline, pretokenization is often desirable:
+```
+http http://127.0.0.1:8080/predictions/<model_name> output_format=conll tokenized_sentences:='[["Die", "Organisation", "gab", "bekannt", "sie", "habe", "Spenden", "veruntreut", "."], ["Next", "sentence", "goes", "here", "!"]]'
+```
 
 ## Architecture
 
