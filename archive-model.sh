@@ -6,6 +6,8 @@ show_usage() {
     echo ""
     echo "Build model-archive using the config MODEL_NAME with weights from the WEIGHTS file."
     echo "MODEL_VARIANT is either 'c2f' or 'incremental'"
+    echo ""
+    echo "Control the bert-windowsize using the WINDOWSIZE environment variable"
 }
 
 
@@ -34,6 +36,13 @@ else
 fi
 
 echo "MODELNAME='$1'" > torch_serve/model_config.py
+
+if [ -z $WINDOWSIZE ]
+then
+    WINDOWSIZE="384"
+fi
+
+echo "WINDOWSIZE='$WINDOWSIZE'" >> torch_serve/model_config.py
 
 $ARCHIVER \
     --model-name $1 \

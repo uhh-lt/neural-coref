@@ -77,7 +77,7 @@ class CorefHandler(BaseHandler):
             tokenized_sentences = self.text_to_token_list(text)
         else:
             tokenized_sentences = inner_data.get("tokenized_sentences")
-        document = get_document('_', tokenized_sentences, 'german', 384, self.tokenizer, 'nested_list')
+        document = get_document('_', tokenized_sentences, 'german', model_config.WINDOWSIZE, self.tokenizer, 'nested_list')
         _, example = self.tensorizer.tensorize_example(document, is_training=False)[0]
         token_map = self.tensorizer.stored_info['subtoken_maps']['_']
         # Remove gold
