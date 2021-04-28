@@ -14,7 +14,7 @@ then
         -it coref-modelserver \
             torchserve \
             --ts-config /home/model-server/config.properties \
-            --models droc_incremental=droc_incremental_teacherforcing_discard.mar \
+            --models $2 \
             --start
 else
     echo "Running on CPU"
@@ -23,6 +23,6 @@ else
         -it coref-modelserver:cpu \
             torchserve \
             --ts-config /home/model-server/config.properties \
-            --models droc_incremental=droc_incremental_teacherforcing_discard.mar \
+            --models $1 \
             --start
 fi
