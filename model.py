@@ -337,11 +337,14 @@ class CorefModel(nn.Module):
                     feature_list.append(seg_distance_emb)
                 if conf['use_features']:  # Antecedent distance
                     feature_list.append(top_antecedent_distance_emb)
-                feature_emb = torch.cat(feature_list, dim=2)
-                feature_emb = self.dropout(feature_emb)
                 target_emb = torch.unsqueeze(top_span_emb, 1).repeat(1, max_top_antecedents, 1)
                 similarity_emb = target_emb * top_antecedent_emb
-                pair_emb = torch.cat([target_emb, top_antecedent_emb, similarity_emb, feature_emb], 2)
+                if len(feature_list) > 0:
+                    feature_emb = torch.cat(feature_list, dim=2)
+                    feature_emb = self.dropout(feature_emb)
+                    pair_emb = torch.cat([target_emb, top_antecedent_emb, similarity_emb, feature_emb], 2)
+                else:
+                    pair_emb = torch.cat([target_emb, top_antecedent_emb, similarity_emb], 2)
                 top_pairwise_slow_scores = torch.squeeze(self.coref_score_ffnn(pair_emb), 2)
                 top_pairwise_scores = top_pairwise_slow_scores + top_pairwise_fast_scores
                 if conf['higher_order'] == 'cluster_merging':
