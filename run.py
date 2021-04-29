@@ -31,6 +31,7 @@ class Runner:
         self.name_suffix = datetime.now().strftime('%b%d_%H-%M-%S')
         self.gpu_id = gpu_id
         self.seed = seed
+        self.last_save_suffix = None
 
         # Set up config
         self.config = util.initialize_config(config_name, create_dirs=log_to_file)
@@ -382,7 +383,11 @@ if __name__ == '__main__':
 
     runner.train(model)
 
-    runner.load_model_checkpoint(model, runner.last_save_suffix)
+    if runner.last_save_suffix is None:
+        runner.last_save_suffix = f'{runner.name}_{runner.name_suffix}_unsaved'
+    else:
+        runner.load_model_checkpoint(model, runner.last_save_suffix)
+    
 
     examples_train, examples_dev, examples_test = runner.data.get_tensor_examples()
     stored_info = runner.data.get_stored_info()
