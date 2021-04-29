@@ -630,7 +630,6 @@ class IncrementalCorefModel(CorefModel):
                                     is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
                                     global_loss_chance=0.0, teacher_forcing=False):
         max_segments = 5
-        segment_size = input_ids.shape[-1]
 
         mention_to_cluster_id = {}
         predicted_clusters = []
@@ -691,7 +690,7 @@ class IncrementalCorefModel(CorefModel):
                 entities, new_cpu_entities, loss = res
                 total_loss = loss + total_loss
             else:
-                entities, new_cpu_entities  = res
+                entities, new_cpu_entities = res
             cpu_entities.extend(new_cpu_entities)
         cpu_entities.extend(entities)
         starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result(
