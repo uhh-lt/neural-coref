@@ -73,7 +73,7 @@ class CorefModel(nn.Module):
     def load_state_dict(self, state_dict: 'OrderedDict[str, Tensor]',
                         strict: bool = True):
         new_shape = (self.config['num_antecedent_distance_buckets'], self.config['feature_emb_size'])
-        if state_dict['emb_antecedent_distance_prior.weight'].shape != new_shape:
+        if 'emb_antecedent_distance_prior.weight' in state_dict and state_dict['emb_antecedent_distance_prior.weight'].shape != new_shape:
             logger.warn('Saved embedding for distance is of different size, some values are initialized randomly.')
             for weight_name in ['emb_antecedent_distance_prior.weight', 'emb_top_antecedent_distance.weight']:
                 state_dict[weight_name] = self.initialize_differently_sized_embedding_layer(
@@ -81,10 +81,11 @@ class CorefModel(nn.Module):
                     new_shape[0],
                 )
         new_shape = (self.config['max_training_sentences'], self.config['feature_emb_size'])
-        if state_dict['emb_segment_distance.weight'].shape != new_shape:
+        emb_segment_distance_weight = 'emb_segment_distance.weight'
+        if emb_segment_distance_weight in state_dict and state_dict[emb_segment_distance_weight].shape != new_shape:
             logger.warn('Saved embedding for segment distance is of different size, some values are initialized randomly.')
-            state_dict['emb_segment_distance.weight'] = self.initialize_differently_sized_embedding_layer(
-                state_dict['emb_segment_distance.weight'],
+            state_dict[emb_segment_distance_weight] = self.initialize_differently_sized_embedding_layer(
+                state_dict[emb_segment_distance_weight],
                 new_shape[0],
             )
         return super().load_state_dict(state_dict, strict=strict)
