@@ -12,6 +12,7 @@ import util
 import time
 from run import Runner
 from os.path import join
+from os import remove
 from metrics import CorefEvaluator
 from datetime import datetime
 from torch.optim.lr_scheduler import LambdaLR
@@ -31,6 +32,7 @@ class MentionRunner(Runner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.last_save_suffix = None
+        self.old_save_suffix = None
 
     def initialize_model(self, saved_suffix=None):
         model = MentionModel(self.config, self.device)
@@ -53,6 +55,8 @@ class MentionRunner(Runner):
         # Set up data
         examples_train, examples_dev, examples_test = self.data.get_tensor_examples()
         stored_info = self.data.get_stored_info()
+        eval_frequency = conf['eval_frequency'] if 'eval_frequency' in conf else len(examples_train)
+        report_frequency = conf['report_frequency'] if 'report_frequency' in conf else len(examples_train)
 
         # Set up optimizer and scheduler
         total_update_steps = len(examples_train) * epochs // grad_accum
@@ -90,13 +94,13 @@ class MentionRunner(Runner):
                 for scheduler in schedulers:
                     scheduler.step()
                 # Report
-                if len(loss_history) % conf['report_frequency'] == 0:
+                if len(loss_history) % report_frequency == 0:
                     # Show avg loss during last report interval
-                    avg_loss = loss_during_report / conf['report_frequency']
+                    avg_loss = loss_during_report / report_frequency
                     loss_during_report = 0.0
                     end_time = time.time()
                     logger.info('Step %d: avg loss %.2f; steps/sec %.2f' %
-                                (len(loss_history), avg_loss, conf['report_frequency'] / (end_time - start_time)))
+                                (len(loss_history), avg_loss, report_frequency / (end_time - start_time)))
                     start_time = end_time
 
                     tb_writer.add_scalar('Training_Loss', avg_loss, len(loss_history))
@@ -104,11 +108,12 @@ class MentionRunner(Runner):
                     tb_writer.add_scalar('Learning_Rate_Task', schedulers[1].get_last_lr()[-1], len(loss_history))
 
                 # Evaluate
-                if len(loss_history) > 0 and len(loss_history) % conf['eval_frequency'] == 0:
+                if len(loss_history) > 0 and len(loss_history) % eval_frequency == 0:
                     f1, _ = self.evaluate(model, examples_dev, stored_info, len(loss_history), official=False, conll_path=self.config['conll_eval_path'], tb_writer=tb_writer)
                     if f1 > max_f1:
                         max_f1 = f1
                         self.save_model_checkpoint(model, len(loss_history))
+                        self.delete_old_checkpoint()
                     logger.info('Eval max f1: %.2f' % max_f1)
                     start_time = time.time()
                 pbar.update()
@@ -281,6 +286,7 @@ class MentionRunner(Runner):
 
     def save_model_checkpoint(self, model, step):
         suffix = f'{self.name_suffix}_{step}'
+        self.old_save_suffix = self.last_save_suffix
         self.last_save_suffix = suffix
         path_ckpt = join(self.config['log_dir'], f"model_{self.last_save_suffix}.bin")
         torch.save(model.state_dict(), path_ckpt)
@@ -291,6 +297,13 @@ class MentionRunner(Runner):
         model.load_state_dict(torch.load(path_ckpt, map_location=torch.device('cpu')), strict=False)
         logger.info('Loaded model from %s' % path_ckpt)
 
+    def delete_old_checkpoint(self):
+        if self.old_save_suffix is None or ('keep_all_saved_models' in self.config \
+            and self.config['keep_all_saved_models'] == True):
+            return
+
+        path_ckpt = join(self.config['log_dir'], f'model_{self.old_save_suffix}.bin')
+        remove(path_ckpt)
 
 def run_mentions(config_name, gpu_id):
     runner = MentionRunner(config_name, gpu_id)
