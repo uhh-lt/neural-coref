@@ -630,7 +630,6 @@ class IncrementalCorefModel(CorefModel):
                                     is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None,
                                     global_loss_chance=0.0, teacher_forcing=False):
         max_segments = 5
-        segment_size = input_ids.shape[-1]
 
         mention_to_cluster_id = {}
         predicted_clusters = []
@@ -691,7 +690,7 @@ class IncrementalCorefModel(CorefModel):
                 entities, new_cpu_entities, loss = res
                 total_loss = loss + total_loss
             else:
-                entities, new_cpu_entities  = res
+                entities, new_cpu_entities = res
             cpu_entities.extend(new_cpu_entities)
         cpu_entities.extend(entities)
         starts, ends, mention_to_cluster_id, predicted_clusters = cpu_entities.get_result(
@@ -753,7 +752,8 @@ class IncrementalCorefModel(CorefModel):
 
         losses = []
         cpu_loss = 0.0
-        new_cluster_weight = len(labels_for_starts.keys()) / len(top_span_starts)
+        discard_weight = len(labels_for_starts.keys()) / len(top_span_starts)
+        new_cluster_weight = len(set(labels_for_starts.keys())) / len(top_span_starts)
         for emb, span_start, span_end, mention_score in zip(top_span_emb, top_span_starts, top_span_ends, top_spans['mention_scores']):
             gold_class = labels_for_starts.get((span_start.item(), span_end.item()))
             if len(entities) == 0:
@@ -799,9 +799,10 @@ class IncrementalCorefModel(CorefModel):
                     cluster_to_update = index_to_update - 1
                 weights = torch.ones(scores.squeeze().T.shape)
                 if return_singletons:
-                    weights[1] = new_cluster_weight
-                else:
                     weights[0] = new_cluster_weight
+                    weights[1] = discard_weight
+                else:
+                    weights[0] = discard_weight
                 cre_loss = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
                 if gold_class and do_loss:
                     if return_singletons:
