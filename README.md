@@ -2,7 +2,7 @@
 
 This repository contains the code for [our 2021 publication](#TODO), adapted from [an existing implementation](https://github.com/lxucs/coref-hoi).
 
-You can use our pre-trained models which are available the [github releases](/release).
+You can use our pre-trained models which are available the [github releases](../../releases).
 The simplest way to use the models for inference is via torchserve,
 download the models and refer to the [torchserve](#torchserve) section of this README.
 
