@@ -50,7 +50,7 @@ Set up environment and data for training and evaluation:
 * All data and config files are placed relative to the: `base_dir = /path/to/project` in [local.conf](local.conf) so change it to point to the root of this repo
 * All splits created using the `split_*` Python scripts will need to be processed using `preprocess.py` to be used as training input for the model, for example, to split the DROC dataset run:
     - `python split_droc.py --type-system-xml /path/to/DROC-Release/droc/src/main/resources/CorefTypeSystem.xml /path/to/DROC-Release/droc/DROC-xmi data/german.droc_gold_conll`
-    - `python preprocess.py --input_dir data/droc_full --output_dir data/droc_full --seg_len 512 --language german --tokenizer_name german-nlp-group/electra-base-german-uncased --input_suffix droc_gold_conll --input_format conll-2012`
+    - `python preprocess.py --input_dir data/droc_full --output_dir data/droc_full --seg_len 512 --language german --tokenizer_name german-nlp-group/electra-base-german-uncased --input_suffix droc_gold_conll --input_format conll-2012 --model_type electra`
 
 
 ## Evaluation
@@ -59,7 +59,7 @@ If you want to use the official evaluator, download and unzip [official conll 20
 Evaluate a model on the dev/test set:
 * Download the corresponding model file (`.mar`) and extract `model*.bin` from it and place it in `data_dir/<experiment_id>/`
 * `python evaluate.py [config] [model_id] [gpu_id] ([output_file])`
-    * e.g. News, SemEval-2010, ELECTRA uncased (base) :`python evaluate.py se10_electra_uncased Apr30_08-52-00_56879 0`
+    * e.g. News, SemEval-2010, ELECTRA uncased (base) :`python evaluate.py se10_electra_uncased tuba10_electra_uncased_Apr30_08-52-00_56879 0`
 
 ## Training
 
