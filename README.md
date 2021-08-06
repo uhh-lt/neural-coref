@@ -104,7 +104,7 @@ First install torchserve which is not part of our requirements.txt: `pip install
 Using torchserve models saved in this manner can be served, e.g.:
 
 ```
-torchserve --models droc_incremental=<model_name>.mar --model-store .
+torchserve --models droc_incremental=<model_name>.mar --model-store . --foreground
 ```
 
 Since the native dependencies may cause issues one some systems we have a custom torchserve docker image in `docker/`.
