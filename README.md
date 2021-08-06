@@ -53,21 +53,22 @@ Set up environment and data for training and evaluation:
 
 
 ## Evaluation
-If you want to use the official evaluator, download and unzip [conll 2012 scorer](https://cs.emory.edu/~lxu85/conll-2012.zip) under this directory.
+If you want to use the official evaluator, download and unzip [official conll 2012 scorer](http://conll.cemantix.org/download/reference-coreference-scorers.v8.01.tar.gz) in your specified `data_dir` directory.
 
 Evaluate a model on the dev/test set:
-* Download the corresponding model directory and unzip it under `data_dir`
-* `python evaluate.py [config] [model_id] [gpu_id]`
-    * e.g. Attended Antecedent:`python evaluate.py train_spanbert_large_ml0_d2 May08_12-38-29_58000 0`
+* Download the corresponding model file (`.mar`) and extract `model*.bin` from it and place it in `data_dir/<experiment_id>/`
+* `python evaluate.py [config] [model_id] [gpu_id] ([output_file])`
+    * e.g. News, SemEval-2010, ELECTRA uncased (base) :`python evaluate.py se10_electra_uncased Apr30_08-52-00_56879 0`
 
 ## Training
 
-`python run.py [config] [gpu_id]`
+`python run.py [config] [gpu_id] (--model model_name)`
 
 * [config] can be any **configuration** in [experiments.conf](experiments.conf)
-* Log file will be saved at `your_data_dir/[config]/log_XXX.txt`
-* Models will be saved at `your_data_dir/[config]/model_XXX.bin`
-* Tensorboard is available at `your_data_dir/tensorboard`
+* Log file will be saved at `data_dir/[config]/log_XXX.txt`
+* Models will be saved at `data_dir/[config]/model_XXX.bin`
+* Tensorboard is available at `data_dir/tensorboard`
+* Optional `--model model_name` can be specified to start training with weights from an existing model
 
 
 ## Configurations
@@ -82,7 +83,7 @@ Some important configurations in [experiments.conf](experiments.conf):
 * `unconditional_eviction_limit` after how long of a distance with no mentions to evict an entity
 * `singleton_eviction_limit` after how long of a distance of no mentions to evict a singleton entity
 * `bert_pretrained_name_or_path`: the name/path of the pretrained BERT model ([HuggingFace BERT models](https://huggingface.co/transformers/main_classes/model.html#transformers.PreTrainedModel.from_pretrained))
-* `max_training_sentences`: the maximum segments to use when document is too long; for BERT-Large and SpanBERT-Large, set to `3` for 32GB GPU or `2` for 24GB GPU
+* `max_training_sentences`: the maximum segments to use when document is too long
 
 
 ## Model Archival
