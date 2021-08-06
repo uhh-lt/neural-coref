@@ -91,6 +91,7 @@ Some important configurations in [experiments.conf](experiments.conf):
 
 Using the model name from the experiments.conf and the relative path to the model binary, create a model archive.
 Optionally supply 'c2f' or 'incremental' as the model type (defaults to incremental).
+In order to archive models you need to to install the model archiver: `pip install torch-model-archiver`.
 ```
 
 ./archive-model.sh <model_name> <path_to_model/model.bin> [MODEL_VARIANT]
@@ -103,7 +104,7 @@ First install torchserve which is not part of our requirements.txt: `pip install
 Using torchserve models saved in this manner can be served, e.g.:
 
 ```
-torchserve --models droc_incremental=<model_name>.mar
+torchserve --models droc_incremental=<model_name>.mar --model-store .
 ```
 
 Since the native dependencies may cause issues one some systems we have a custom torchserve docker image in `docker/`.

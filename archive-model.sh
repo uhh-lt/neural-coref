@@ -48,7 +48,7 @@ $ARCHIVER \
     --model-name $1 \
     --model-file $MODEL_VARIANT \
     --serialized-file $2 \
-    --extra-files $(ls -1p *.py | grep -v / | xargs echo | sed 's/ /,/g'),experiments.conf,torch_serve \
+    --extra-files $(ls -1p *.py | grep -v / | xargs echo | sed 's/ /,/g'),experiments.conf,local.conf,torch_serve \
     --handler torch_serve/model_handler.py \
     --archive-format default \
     --requirements-file requirements.txt \
