@@ -45,6 +45,7 @@ The code was extended to handle incremental coreference resolution and separate 
 
 ## Basic Setup
 Set up environment and data for training and evaluation:
+* Install PyTorch for your platform
 * Install Python3 dependencies: `pip install -r requirements.txt`
 * All data and config files are placed relative to the: `base_dir = /path/to/project` in [local.conf](local.conf) so change it to point to the root of this repo
 * All splits created using the `split_*` Python scripts will need to be processed using `preprocess.py` to be used as training input for the model, for example, to split the DROC dataset run:
