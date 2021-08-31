@@ -1,6 +1,6 @@
 # End-to-End Coreference For German
 
-This repository contains the code for [our 2021 publication](#TODO), adapted from [an existing implementation](https://github.com/lxucs/coref-hoi).
+This repository contains the code for [our 2021 publication](https://www.inf.uni-hamburg.de/en/inst/ab/lt/publications/2021-schroeder-hatzel-konvens-coref.pdf), adapted from [an existing implementation](https://github.com/lxucs/coref-hoi).
 
 You can use our pre-trained models which are available the [github releases](../../releases).
 The simplest way to use the models for inference is via torchserve,
@@ -9,7 +9,7 @@ download the models and refer to the [torchserve](#torchserve) section of this R
 If you base your work on our models, incremental code or the German dataset processing, please cite our paper:
 
 ```bibtex
-@inproceedings{
+@inproceedings{schroeder-etal-2021-coref,
   title = {Neural End-to-end Coreference Resolution for {G}erman in Different Domains},
   author = {Schröder, Fynn and Hatzel, Hans Ole and Biemann, Chris},
   year = {2021},
