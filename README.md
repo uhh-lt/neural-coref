@@ -118,7 +118,7 @@ The model handlers essentially provide the http API, there are two modes of oper
 Raw text is useful for direct visualization (example requests made using [httpie](https://httpie.io/)),
 in this context you may also want to try the 'raw' output mode for relatively human-friendly text.
 ```
-http http://127.0.0.1:8080/predictions/<model_name> output_format=raw tokenized_sentences="Die Organisation gab bekannt sie habe Spenden veruntreut."
+http http://127.0.0.1:8080/predictions/<model_name> output_format=raw text="Die Organisation gab bekannt sie habe Spenden veruntreut."
 ```
 
 In the context of a larger language pipeline, pretokenization is often desirable:
